@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+{% block title %}Home &mdash; CricBiomech AI{% endblock %}
+{% block content %}
+
+<!-- ================= HERO ================= -->
+<section class="hero">
+    <div class="wrap hero-grid" style="max-width:1240px; margin:0 auto; padding:0 32px;">
+        <div>
+            <span class="hero-badge">
+                <i class="fas fa-bolt"></i>
+                AI &middot; Pose Estimation &middot; Sports Science
+            </span>
+            <h1>Cricket batting analysis with <span class="grad">real-time biomechanical insight</span></h1>
+            <p class="hero-lead">
+                Transform any batting clip into a structured performance review —
+                pose tracking, joint-angle analysis, phase detection, and shot
+                classification powered by computer vision and machine learning.
+            </p>
+            <div class="hero-actions">
+                <a class="btn btn-primary" href="{{ url_for('upload_form') }}">
+                    <i class="fas fa-cloud-arrow-up"></i>
+                    Analyse Your Shot
+                </a>
+                <a class="btn btn-secondary" href="{{ url_for('dashboard') }}">
+                    <i class="fas fa-chart-line"></i>
+                    Explore Dashboard
+                </a>
+            </div>
+        </div>
+
+        <div class="pipeline-card">
+            <div class="pipeline-title">
+                <i class="fas fa-diagram-project"></i>
+                Analysis Pipeline
+            </div>
+
+            <div class="pipeline-step">
+                <span class="pipeline-step-icon"><i class="fas fa-cloud-arrow-up"></i></span>
+                Upload Cricket Video
+            </div>
+            <div class="pipeline-arrow"><i class="fas fa-arrow-down"></i></div>
+
+            <div class="pipeline-step">
+                <span class="pipeline-step-icon"><i class="fas fa-person-running"></i></span>
+                AI Pose Detection
+            </div>
+            <div class="pipeline-arrow"><i class="fas fa-arrow-down"></i></div>
+
+            <div class="pipeline-step">
+                <span class="pipeline-step-icon"><i class="fas fa-ruler-combined"></i></span>
+                Biomechanical Analysis
+            </div>
+            <div class="pipeline-arrow"><i class="fas fa-arrow-down"></i></div>
+
+            <div class="pipeline-step">
+                <span class="pipeline-step-icon"><i class="fas fa-wave-square"></i></span>
+                Shot Phase Detection
+            </div>
+            <div class="pipeline-arrow"><i class="fas fa-arrow-down"></i></div>
+
+            <div class="pipeline-step">
+                <span class="pipeline-step-icon"><i class="fas fa-chart-bar"></i></span>
+                Feature Extraction
+            </div>
+            <div class="pipeline-arrow"><i class="fas fa-arrow-down"></i></div>
+
+            <div class="pipeline-step">
+                <span class="pipeline-step-icon"><i class="fas fa-microchip"></i></span>
+                Machine Learning Analysis
+            </div>
+            <div class="pipeline-arrow"><i class="fas fa-arrow-down"></i></div>
+
+            <div class="pipeline-step highlight">
+                <span class="pipeline-step-icon"><i class="fas fa-wand-magic-sparkles"></i></span>
+                Performance Insights
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ================= KEY CAPABILITIES ================= -->
+<section class="section" style="max-width:1240px; margin:0 auto; padding:0 32px;">
+    <div class="section-header">
+        <h2>Key Capabilities</h2>
+        <p>End-to-end biomechanics analysis from a single batting video.</p>
+    </div>
+    <div class="grid g3">
+        <div class="card hoverable animate-in">
+            <div class="card-header">
+                <span class="card-icon ic-blue"><i class="fas fa-person-running"></i></span>
+                Pose Estimation
+            </div>
+            <p class="small muted" style="margin:0;">
+                MediaPipe Pose tracks 33 key body landmarks on the batsman across
+                every frame, isolating the correct player throughout the shot.
+            </p>
+        </div>
+
+        <div class="card hoverable animate-in">
+            <div class="card-header">
+                <span class="card-icon ic-cyan"><i class="fas fa-ruler-combined"></i></span>
+                Joint Angle Analysis
+            </div>
+            <p class="small muted" style="margin:0;">
+                Elbow, knee, shoulder and hip angles computed per frame, producing
+                full angle time-series and precise impact-angle measurements.
+            </p>
+        </div>
+
+        <div class="card hoverable animate-in">
+            <div class="card-header">
+                <span class="card-icon ic-green"><i class="fas fa-wave-square"></i></span>
+                Batting Phase Detection
+            </div>
+            <p class="small muted" style="margin:0;">
+                Automatic phase segmentation — Stance, Backlift, Downswing,
+                Impact, Follow-through — with frame-level boundaries.
+            </p>
+        </div>
+
+        <div class="card hoverable animate-in">
+            <div class="card-header">
+                <span class="card-icon ic-purple"><i class="fas fa-crosshairs"></i></span>
+                Shot Classification
+            </div>
+            <p class="small muted" style="margin:0;">
+                Supervised ML models classify cut, defence, drive and flick shots
+                with Leave-One-Out Cross-Validation.
+            </p>
+        </div>
+
+        <div class="card hoverable animate-in">
+            <div class="card-header">
+                <span class="card-icon ic-amber"><i class="fas fa-brain"></i></span>
+                ML Insights
+            </div>
+            <p class="small muted" style="margin:0;">
+                Model comparison, feature importance, and interpretability —
+                full ML evaluation pipeline on the research dataset.
+            </p>
+        </div>
+
+        <div class="card hoverable animate-in">
+            <div class="card-header">
+                <span class="card-icon ic-red"><i class="fas fa-video"></i></span>
+                Annotated Video Output
+            </div>
+            <p class="small muted" style="margin:0;">
+                Generated analysis video with tracked skeleton overlay, live
+                batting phase, frame counter and movement score HUD.
+            </p>
+        </div>
+    </div>
+</section>
+
+<!-- ================= WHAT THE SYSTEM DOES ================= -->
+<section class="section" style="max-width:1240px; margin:0 auto; padding:0 32px;">
+    <div class="grid g2x">
+        <div class="card">
+            <div class="card-header">
+                <span class="card-icon ic-blue"><i class="fas fa-list-check"></i></span>
+                What the system does
+            </div>
+            <ul class="list-checks small">
+                <li><span class="check-icon"><i class="fas fa-check"></i></span>Consistent batsman tracking across frames</li>
+                <li><span class="check-icon"><i class="fas fa-check"></i></span>Annotated analysis video with skeleton &amp; HUD overlay</li>
+                <li><span class="check-icon"><i class="fas fa-check"></i></span>Joint-angle time-series and impact-angle measurements</li>
+                <li><span class="check-icon"><i class="fas fa-check"></i></span>Automatic phase detection: Stance through Follow-through</li>
+                <li><span class="check-icon"><i class="fas fa-check"></i></span>Per-video biomechanics feature export to CSV</li>
+                <li><span class="check-icon"><i class="fas fa-check"></i></span>ML-based shot classification with feature importance</li>
+            </ul>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <span class="card-icon ic-cyan"><i class="fas fa-ruler-combined"></i></span>
+                Biomechanics metrics analysed
+            </div>
+            <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px;">
+                <span class="badge b-phase-Stance">Stance</span>
+                <span class="badge b-phase-Backlift">Backlift</span>
+                <span class="badge b-phase-Downswing">Downswing</span>
+                <span class="badge b-phase-Impact">Impact</span>
+                <span class="badge b-phase-Follow-through">Follow-through</span>
+            </div>
+            <ul class="list-checks small">
+                <li><span class="check-icon"><i class="fas fa-check"></i></span>Elbow, knee, shoulder &amp; hip joint angles (left / right)</li>
+                <li><span class="check-icon"><i class="fas fa-check"></i></span>Impact frame &amp; impact time</li>
+                <li><span class="check-icon"><i class="fas fa-check"></i></span>Downswing &amp; follow-through durations</li>
+                <li><span class="check-icon"><i class="fas fa-check"></i></span>Movement score profiles &amp; summary statistics</li>
+            </ul>
+        </div>
+    </div>
+</section>
+
+<!-- ================= CTA ================= -->
+<section class="section" style="max-width:1240px; margin:0 auto; padding:0 32px;">
+    <div class="cta-banner">
+        <h2>Ready to analyse a shot?</h2>
+        <p>Upload a batting clip, choose the shot type, and receive a full biomechanics report with annotated video and ML insights.</p>
+        <a class="btn btn-primary" href="{{ url_for('upload_form') }}">
+            <i class="fas fa-cloud-arrow-up"></i>
+            Analyse Your Shot
+        </a>
+    </div>
+</section>
+
+<!-- ================= DATASET STATUS ================= -->
+<section class="section" style="max-width:1240px; margin:0 auto; padding:0 32px;">
+    <div class="note warn">
+        <i class="fas fa-triangle-exclamation"></i>
+        <div>
+            <strong>Exploratory research dataset.</strong>
+            The current dataset contains <strong>{{ stats["total_videos"] }} samples</strong>.
+            All statistical patterns and model metrics are exploratory and
+            <em>not</em> sufficient for reliable real-world generalization.
+        </div>
+    </div>
+</section>
+
+{% endblock %}

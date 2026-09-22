@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+
+{% block title %}
+{% if job_status == 1 %}Processing {{ video_name or 'video' }} &mdash; CricBiomech AI{% else %}Analysis complete &mdash; CricBiomech AI{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>
+            <i class="fas fa-video" style="color: var(--accent);"></i>
+            Analysing{% if video_name %} <span style="color: var(--accent);">{{ video_name }}</span>{% endif %}
+            <span class="badge b-info" style="margin-left: 8px;">{{ shot_type_label }}</span>
+        </h1>
+        <p class="lead" style="margin-top: 4px;">
+            The AI pipeline is running in the background. This page updates live and
+            opens the analysis automatically when it finishes.
+        </p>
+    </div>
+</div>
+
+<div class="card" style="max-width: 720px; margin: 0 auto;">
+    <div class="card-header">
+        <span class="card-icon ic-accent"><i class="fas fa-bolt"></i></span>
+        <span id="statusTitle">Starting analysis…</span>
+    </div>
+
+    <div style="padding: 24px 24px 20px;">
+        <div class="progress" id="jobProgressBar">
+            <div class="progress-bar indeterminate" style="width: 40%;" id="jobProgressFill"></div>
+        </div>
+
+        <p class="small faint" id="statusSub" style="margin-top: 10px;">
+            <i class="fas fa-spinner fa-spin"></i> Queueing the pipeline…
+        </p>
+
+        <ul id="jobStepList" class="job-steps" style="margin-top: 18px; padding: 0; list-style: none;">
+            <li class="job-step pending" data-step="upload">
+                <i class="fas fa-circle-check job-step-icon"></i>
+                <span>Uploaded &amp; saved the video</span>
+            </li>
+            <li class="job-step pending" data-step="pose">
+                <i class="fas fa-circle-check job-step-icon"></i>
+                <span>Detecting player pose &amp; landmarks</span>
+            </li>
+            <li class="job-step pending" data-step="angles">
+                <i class="fas fa-circle-check job-step-icon"></i>
+                <span>Calculating joint angles</span>
+            </li>
+            <li class="job-step pending" data-step="phases">
+                <i class="fas fa-circle-check job-step-icon"></i>
+                <span>Detecting batting phases</span>
+            </li>
+            <li class="job-step pending" data-step="features">
+                <i class="fas fa-circle-check job-step-icon"></i>
+                <span>Extracting biomechanics features</span>
+            </li>
+            <li class="job-step pending" data-step="rating">
+                <i class="fas fa-circle-check job-step-icon"></i>
+                <span>Rating the shot (0–10)</span>
+            </li>
+            <li class="job-step pending" data-step="video">
+                <i class="fas fa-circle-check job-step-icon"></i>
+                <span>Rendering annotated video</span>
+            </li>
+        </ul>
+
+        <div class="note error hidden" id="jobError" style="margin-top: 16px;">
+            <i class="fas fa-circle-exclamation"></i>
+            <div id="jobErrorText"></div>
+        </div>
+
+        <div class="small faint" style="margin-top: 16px;">
+            <i class="fas fa-circle-info" style="font-size: 10px;"></i>
+            Please keep this tab open. When everything is done you'll be taken
+            straight to the shot analysis page.
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    var jobId = {{ job_id|tojson }};
+    var doneUrl = {{ (url_for('results', video_name='__NAME__'))|tojson }};
+    var errorBox = document.getElementById("jobError");
+    var errorText = document.getElementById("jobErrorText");
+    var statusTitle = document.getElementById("statusTitle");
+    var statusSub = document.getElementById("statusSub");
+    var fill = document.getElementById("jobProgressFill");
+    var steps = Array.prototype.slice.call(document.querySelectorAll(".job-step"));
+
+    // Map live step labels (from the server) back to the static step list.
+    var stepMap = [
+        ["Detecting player pose", "pose"],
+        ["Calculating joint angles", "angles"],
+        ["Detecting batting phases", "phases"],
+        ["Extracting biomechanics features", "features"],
+        ["Rating the shot", "rating"],
+        ["Rendering annotated video", "video"]
+    ];
+
+    function setStep(ord) {
+        steps.forEach(function (el, i) {
+            el.className = "job-step " + (i < ord ? "done" : (i === ord ? "active" : "pending"));
+        });
+        if (ord >= steps.length - 1) { fill.style.width = "95%"; }
+    }
+
+    function fail(message) {
+        statusTitle.textContent = "Analysis failed";
+        statusSub.innerHTML = '<i class="fas fa-triangle-exclamation"></i> The pipeline could not finish this clip.';
+        errorText.textContent = message || "Check the server console for details, then try another video.";
+        errorBox.classList.remove("hidden");
+        fill.style.width = "100%";
+        document.getElementById("jobProgressBar").classList.add("error");
+    }
+
+    function finish(name) {
+        if (!name) { name = {{ video_name|tojson }}; }
+        statusTitle.textContent = "Analysis complete — opening results…";
+        statusSub.innerHTML = '<i class="fas fa-check-circle"></i> Redirecting…';
+        setStep(steps.length - 1);
+        fill.style.width = "100%";
+        window.location.href = doneUrl.replace("__NAME__", encodeURIComponent(name));
+    }
+
+    function poll() {
+        fetch("/progress_status/" + jobId, { cache: "no-store" })
+            .then(function (r) { return r.json(); })
+            .then(function (status) {
+                if (status.state === "missing") {
+                    fail("The job record was not found.");
+                    return;
+                }
+                (status.steps || []).forEach(function (label) {
+                    stepMap.forEach(function (pair) {
+                        if (label.indexOf(pair[0]) !== -1) {
+                            var target = steps.findIndex(function (el) { return el.dataset.step === pair[1]; });
+                            if (target >= 0) { setStep(target); }
+                        }
+                    });
+                });
+                if (status.current && status.current !== "Starting…" && status.current !== "Queued…") {
+                    statusTitle.textContent = status.current;
+                    statusSub.innerHTML = '<i class="fas fa-spinner fa-spin"></i> ' + status.current;
+                }
+                if (status.state === "done") {
+                    if (status.ok) { finish(status.video_name); }
+                    else { fail(status.error); }
+                    return;
+                }
+                setTimeout(poll, 1500);
+            })
+            .catch(function () { setTimeout(poll, 2500); });
+    }
+
+    setStep(0);
+    poll();
+})();
+</script>
+<style>
+    .job-steps { margin: 0; }
+    .job-step { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border-soft, #14202c); font-size: 0.85rem; color: var(--text-3, #8ba1b5); }
+    .job-step:last-child { border-bottom: none; }
+    .job-step .job-step-icon { width: 18px; color: var(--text-3, #8ba1b5); }
+    .job-step.pending .job-step-icon { color: var(--text-3, #8ba1b5); }
+    .job-step.active { color: var(--text-1, #e8f0f8); font-weight: 600; }
+    .job-step.active .job-step-icon { color: var(--accent, #4db8ff); animation: spin 1.4s linear infinite; }
+    .job-step.done { color: #6dd49b; }
+    .job-step.done .job-step-icon { color: #6dd49b; }
+    .job-step.done .job-step-icon, .job-step.active .job-step-icon { width: 18px; }
+</style>
+{% endblock %}

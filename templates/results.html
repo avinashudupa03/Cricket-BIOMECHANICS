@@ -1,0 +1,643 @@
+{% extends "base.html" %}
+{% block title %}Analysis — {{ data["video_name"] }} &mdash; CricBiomech AI{% endblock %}
+{% block content %}
+
+<!-- ================= PAGE HEADER ================= -->
+<div class="page-header">
+    <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap;">
+        <div>
+            <h1><i class="fas fa-chart-line" style="color:var(--accent); font-size:0.85em;"></i> Video Analysis Results</h1>
+            <p class="subtitle" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                <code style="font-size:1rem;">{{ data["video_name"] }}</code>
+                {% if shot_type %}<span class="badge b-{{ shot_type }}">{{ shot_type | capitalize }}</span>{% endif %}
+                <span class="badge b-success"><i class="fas fa-check" style="font-size:0.65rem;"></i> Processed</span>
+                <span class="faint small" style="margin-left:4px;">
+                    <i class="fas fa-film" style="font-size:0.7rem;"></i>
+                    {{ data["frames"] if data["frames"] is not none else "—" }} frames
+                </span>
+            </p>
+        </div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <a class="btn btn-primary" href="{{ url_for('upload_form') }}">
+                <i class="fas fa-cloud-arrow-up"></i> Analyse Another
+            </a>
+            <a class="btn btn-secondary" href="{{ url_for('dashboard') }}">
+                <i class="fas fa-chart-line"></i> Dashboard
+            </a>
+        </div>
+    </div>
+</div>
+
+<div class="page-body">
+
+<!-- ================= 1. ANALYSED VIDEO ================= -->
+<div class="card" style="margin-bottom:16px;">
+    <div class="card-header">
+        <span class="card-icon ic-red"><i class="fas fa-play"></i></span>
+        Analysed Video
+        <span style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+            <select id="repeatSelect" class="field" style="padding:4px 8px; font-size:0.8rem;" title="Playback repeat mode">
+                <option value="loop" selected>Repeat (loop)</option>
+                <option value="2">Repeat 2×</option>
+                <option value="3">Repeat 3×</option>
+                <option value="1">Play once</option>
+            </select>
+            <button class="btn btn-secondary" id="replayBtn" type="button" style="padding:4px 10px; font-size:0.8rem;">
+                <i class="fas fa-rotate-right"></i> Replay
+            </button>
+        </span>
+    </div>
+
+    {% if has_analysis %}
+    <div class="video-container">
+        <video id="analysisVideo" controls playsinline preload="metadata" loop
+               src="{{ url_for('output_video_file', video_name=data['video_name']) }}">
+            Your browser does not support HTML5 video.
+        </video>
+    </div>
+    <p class="small faint" style="margin-top:10px;">
+        <i class="fas fa-circle-info" style="font-size:0.7rem;"></i>
+        Annotated overlay: tracked skeleton, live batting phase, frame counter,
+        movement score and key joint angles.
+        <a class="small" style="margin-left:6px; color:var(--accent);"
+           href="{{ url_for('output_video_file', video_name=data['video_name']) }}" download>
+            <i class="fas fa-download" style="font-size:0.7rem;"></i> Download
+        </a>
+    </p>
+    <form method="post" action="{{ url_for('generate_analysis', video_name=data['video_name']) }}" style="margin-top:6px;">
+        <button class="btn btn-secondary" type="submit" style="padding:4px 10px; font-size:0.8rem;">
+            <i class="fas fa-arrows-rotate"></i> Regenerate Video
+        </button>
+    </form>
+    {% else %}
+    <div class="note warn">
+        <i class="fas fa-triangle-exclamation"></i>
+        <div>
+            The annotated video for this clip has not been generated yet.
+            <form method="post" action="{{ url_for('generate_analysis', video_name=data['video_name']) }}" style="display:inline-block; margin:0 0 0 8px;">
+                <button class="btn btn-success" type="submit" style="padding:4px 10px; font-size:0.8rem;">
+                    <i class="fas fa-wand-magic-sparkles"></i> Generate now
+                </button>
+            </form>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- ================= 2. SHOT RATING ================= -->
+{% if data["rating"] %}
+{% set rating = data["rating"] %}
+<div class="card" style="margin-bottom:16px; border-left:4px solid var(--accent);"
+     data-tooltip="Deterministic 0-10 rating computed from the biomechanical features below.">
+    <div class="card-header">
+        <span class="card-icon ic-green"><i class="fas fa-star"></i></span>
+        Shot Rating
+    </div>
+
+    <div style="display:flex; gap:24px; flex-wrap:wrap; align-items:stretch;">
+        <!-- Big rating number -->
+        <div style="flex:0 0 auto; text-align:center; padding:8px 28px 8px 8px; border-right:1px solid var(--border-soft);">
+            <div class="metric-value" style="font-size:3.1rem; line-height:1.05; color:var(--accent);" data-counter="{{ rating['rating'] }}">{{ "%.1f"|format(rating["rating"]) }}</div>
+            <div class="metric-label" style="font-size:0.95rem; margin-top:2px;">/ 10</div>
+            <div style="margin-top:8px;">
+                <span class="badge b-success" style="font-size:0.8rem;">{{ rating["classification"] }}</span>
+            </div>
+            <div class="rating-gauge" data-rating="{{ rating['rating'] }}"
+                 title="Shot rating on the 0-10 scale">
+                <div class="rating-marker"></div>
+            </div>
+            <div class="rating-bands">
+                <span>0</span><span>5</span><span>10</span>
+            </div>
+        </div>
+
+        <!-- Summary panel -->
+        <div style="flex:1 1 320px; min-width:260px;">
+            <div class="metric-grid" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr));">
+                <div class="metric-card" data-tooltip="Higher = more reliable. Based on how much factor weight was backed by real data.">
+                    <div class="metric-value">{{ "%.0f"|format(rating["confidence"] * 100) }}<span style="font-size:0.55em;color:var(--text-3);">%</span></div>
+                    <div class="metric-label">Confidence</div>
+                </div>
+                <div class="metric-card" data-tooltip="Share of total factor weight covered by available data">
+                    <div class="metric-value">{{ "%.0f"|format(rating["covered_weight"] * 100) }}<span style="font-size:0.55em;color:var(--text-3);">%</span></div>
+                    <div class="metric-label">Data Coverage</div>
+                </div>
+                <div class="metric-card" data-tooltip="Metrics that could not be scored from available data">
+                    <div class="metric-value">{{ rating["unavailable_metrics"]|length if rating["unavailable_metrics"] else 0 }}</div>
+                    <div class="metric-label">Unscored Factors</div>
+                </div>
+            </div>
+
+            <div class="note faint" style="margin-top:12px;">
+                <i class="fas fa-circle-info" style="font-size:0.75rem;"></i>
+                <div>{{ rating["explanation"] }}</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Strengths / weaknesses -->
+    {% if rating["strengths"] or rating["weaknesses"] %}
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; margin-top:16px;">
+        {% if rating["strengths"] %}
+        <div>
+            <div class="chart-title" style="color:var(--green);"><i class="fas fa-plus-circle"></i> Strengths</div>
+            <ul class="rating-list">
+                {% for s in rating["strengths"] %}
+                <li>{{ s }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+        {% if rating["weaknesses"] %}
+        <div>
+            <div class="chart-title" style="color:var(--red);"><i class="fas fa-minus-circle"></i> Weaknesses</div>
+            <ul class="rating-list">
+                {% for w in rating["weaknesses"] %}
+                <li>{{ w }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <!-- Factor breakdown -->
+    {% if rating["factors"] %}
+    <div class="table-wrap" style="margin-top:18px; max-height:420px; overflow:auto;">
+        <table class="feature-tbl">
+            <thead>
+                <tr>
+                    <th>Factor</th>
+                    <th>Weight</th>
+                    <th>Score (0-10)</th>
+                    <th>Weighted</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for f in rating["factors"] %}
+                <tr data-tooltip="{{ f['comment'] }}">
+                    <td>{{ f["label"] }}</td>
+                    <td class="mono">{{ "%.2f"|format(f["weight"]) }}</td>
+                    {% if f["score"] is not none %}
+                    <td class="mono" style="text-align:center;">
+                        <span class="factor-score
+                            {% if f['score'] >= 7 %}fs-good
+                            {% elif f['score'] >= 4 %}fs-mid
+                            {% else %}fs-bad{% endif %}">{{ "%.1f"|format(f["score"]) }}</span>
+                    </td>
+                    <td class="mono">{{ "%.2f"|format(f["weighted"]) }}</td>
+                    {% else %}
+                    <td class="mono faint" colspan="2" style="text-align:center;">unavailable</td>
+                    {% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <p class="small faint" style="margin-top:10px;">
+        <i class="fas fa-circle-info" style="font-size:0.7rem;"></i>
+        Weights are re-normalised across available factors when metrics are
+        missing; unavailable factors are never silently invented.
+    </p>
+    {% endif %}
+</div>
+{% endif %}
+
+<!-- ================= 3. KEY METRICS ================= -->
+{% if data["metrics"] %}
+<div class="card" style="margin-bottom:16px;">
+    <div class="card-header">
+        <span class="card-icon ic-blue"><i class="fas fa-gauge-high"></i></span>
+        Key Performance Metrics
+    </div>
+    {% set m = data["metrics"] %}
+    <div class="metric-grid">
+        <div class="metric-card" data-tooltip="Frame index at ball contact">
+            <div class="metric-value" data-counter="{{ m.get('impact_frame') if m.get('impact_frame') is not none else 0 }}">{{ m.get("impact_frame") if m.get("impact_frame") is not none else "—" }}</div>
+            <div class="metric-label">Impact Frame</div>
+            <div class="metric-sub">frame index</div>
+        </div>
+        <div class="metric-card" data-tooltip="Milliseconds from start">
+            <div class="metric-value">{{ m.get("impact_time_ms") if m.get("impact_time_ms") is not none else "—" }}</div>
+            <div class="metric-label">Impact Time</div>
+            <div class="metric-sub">milliseconds</div>
+        </div>
+        <div class="metric-card" data-tooltip="Duration from backlift to impact">
+            <div class="metric-value">{{ m.get("downswing_duration_ms") if m.get("downswing_duration_ms") is not none else "—" }}</div>
+            <div class="metric-label">Downswing Duration</div>
+            <div class="metric-sub">ms</div>
+        </div>
+        <div class="metric-card" data-tooltip="Duration after ball contact">
+            <div class="metric-value">{{ m.get("followthrough_duration_ms") if m.get("followthrough_duration_ms") is not none else "—" }}</div>
+            <div class="metric-label">Follow-through</div>
+            <div class="metric-sub">ms</div>
+        </div>
+        <div class="metric-card" data-tooltip="Peak kinetic output">
+            <div class="metric-value">{{ "%.3f"|format(m["maximum_movement_score"]) if m.get("maximum_movement_score") is not none else "—" }}</div>
+            <div class="metric-label">Max Movement Score</div>
+            <div class="metric-sub">peak output</div>
+        </div>
+        <div class="metric-card" data-tooltip="Mean movement across stroke">
+            <div class="metric-value">{{ "%.3f"|format(m["average_movement_score"]) if m.get("average_movement_score") is not none else "—" }}</div>
+            <div class="metric-label">Avg Movement Score</div>
+            <div class="metric-sub">mean across stroke</div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- ================= 4. PHASE TIMELINE ================= -->
+{% if phase_timeline %}
+<div class="card" style="margin-bottom:16px;">
+    <div class="card-header">
+        <span class="card-icon ic-green"><i class="fas fa-timeline"></i></span>
+        Shot Phase Timeline
+    </div>
+    {% set total = phase_timeline["total_frames"] if phase_timeline["total_frames"] and phase_timeline["total_frames"] > 0 else 1 %}
+    {% set colors = {
+        'Stance': '#4db8ff',
+        'Backlift': '#ffb84d',
+        'Downswing': '#22d3a6',
+        'Impact': '#ff6b8a',
+        'Follow-through': '#a78bfa'
+    } %}
+    <div class="phase-timeline">
+        {% for seg in phase_timeline["segments"] %}
+        {% set w = ((seg["end"] - seg["start"] + 1) / total * 100) %}
+        <div class="phase-segment{% if seg['phase'] == 'Impact' %} impact-segment{% endif %}"
+             style="width: {{ w }}%; background: {{ colors.get(seg['phase'], '#888') }};"
+             data-tooltip="{{ seg['phase'] }}: frames {{ seg['start'] }}–{{ seg['end'] }} ({{ seg['end'] - seg['start'] + 1 }} frames)">
+            {{ seg["phase"] }}
+            <span class="phase-frames">{{ seg["start"] }}{% if seg["end"] != seg["start"] %}–{{ seg["end"] }}{% endif %}</span>
+        </div>
+        {% endfor %}
+    </div>
+    <div class="phase-legend">
+        {% for p in ['Stance','Backlift','Downswing','Impact','Follow-through'] %}
+        <span class="phase-legend-item"><span class="phase-legend-dot" style="background:{{ colors[p] }}"></span>{{ p }}</span>
+        {% endfor %}
+    </div>
+    <p class="small faint" style="margin-top:12px;">
+        Impact detected at frame
+        <strong style="color:var(--red);">{{ phase_timeline["impact_frame"] if phase_timeline["impact_frame"] is not none else "—" }}</strong>
+        (highlighted red). Segment ranges from <code>batting_phases.csv</code>.
+    </p>
+</div>
+{% endif %}
+
+<!-- ================= 5. JOINT ANGLES AT IMPACT ================= -->
+{% if data["impact_angles"] %}
+<div class="card" style="margin-bottom:16px;">
+    <div class="card-header">
+        <span class="card-icon ic-purple"><i class="fas fa-ruler-combined"></i></span>
+        Joint Angles at Impact
+    </div>
+    {% set left_cols = [] %}
+    {% set right_cols = [] %}
+    {% for col in impact_angle_columns %}
+        {% if col.startswith('left_') and col in data["impact_angles"] and data["impact_angles"][col] is not none %}{% set _ = left_cols.append(col) %}{% endif %}
+        {% if col.startswith('right_') and col in data["impact_angles"] and data["impact_angles"][col] is not none %}{% set _ = right_cols.append(col) %}{% endif %}
+    {% endfor %}
+    {% if left_cols or right_cols %}
+    <div class="joint-grid">
+        <div class="body-panel">
+            <div class="body-panel-title">
+                <i class="fas fa-arrow-left" style="color:var(--accent); font-size:0.8rem;"></i>
+                Left Side
+            </div>
+            {% for col in left_cols %}
+            <div class="joint-row" data-tooltip="{{ impact_angle_labels[col] }} at moment of ball contact">
+                <span class="joint-name">{{ impact_angle_labels[col] }}</span>
+                <span class="joint-value" style="color:var(--accent);">{{ "%.1f"|format(data["impact_angles"][col]) }}°</span>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="body-panel">
+            <div class="body-panel-title">
+                Right Side
+                <i class="fas fa-arrow-right" style="color:var(--accent); font-size:0.8rem;"></i>
+            </div>
+            {% for col in right_cols %}
+            <div class="joint-row" data-tooltip="{{ impact_angle_labels[col] }} at moment of ball contact">
+                <span class="joint-name">{{ impact_angle_labels[col] }}</span>
+                <span class="joint-value" style="color:var(--accent);">{{ "%.1f"|format(data["impact_angles"][col]) }}°</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    <p class="small faint" style="margin-top:12px;">
+        <i class="fas fa-circle-info" style="font-size:0.7rem;"></i>
+        Joint angle at the instant of ball contact, in degrees.
+    </p>
+    {% endif %}
+</div>
+{% endif %}
+
+<!-- ================= 5b. INJURY RISK & BATSMAN SAFETY ================= -->
+{% if injury and injury["available"] %}
+{% set sc = injury["summary"]["safety_score"] %}
+{% set risk = injury["summary"]["risk_level"] %}
+{% set flags = injury["flags"] %}
+<div class="card" style="margin-bottom:16px; border-left:4px solid
+    {% if risk.startswith('High') %}var(--red){% elif risk.startswith('Moderate') %}var(--amber){% else %}var(--green){% endif %};">
+    <div class="card-header">
+        <span class="card-icon {% if risk.startswith('High') %}ic-red{% elif risk.startswith('Moderate') %}ic-amber{% else %}ic-green{% endif %}">
+            <i class="fas fa-shield-halved"></i>
+        </span>
+        Injury Risk &amp; Batsman Safety
+        <span class="badge {% if risk.startswith('High') %}b-danger{% elif risk.startswith('Moderate') %}b-warning{% else %}b-success{% endif %}" style="margin-left:12px; font-size:0.7rem;">
+            {{ risk }} risk
+        </span>
+    </div>
+
+    <div style="display:flex; gap:24px; flex-wrap:wrap; align-items:stretch;">
+        <!-- Safety score gauge -->
+        <div style="flex:0 0 auto; text-align:center; padding:8px 24px 8px 8px; border-right:1px solid var(--border-soft);">
+            <div class="metric-value" style="font-size:3.0rem; line-height:1.05;
+                color:{% if sc >= 8 %}var(--green){% elif sc >= 5 %}var(--amber){% else %}var(--red){% endif %};"
+                data-counter="{{ sc }}">{{ "%.1f"|format(sc) }}</div>
+            <div class="metric-label" style="font-size:0.8rem; margin-top:2px;">/ 10 safety</div>
+            <div class="rating-gauge" data-rating="{{ sc }}"
+                 title="Batsman safety (0-10, 10=safest)">
+                <div class="rating-marker"></div>
+            </div>
+            <div class="rating-bands">
+                <span>0</span><span>5</span><span>10</span>
+            </div>
+            <p class="faint" style="font-size:0.7rem; margin-top:8px; max-width:160px;">
+                Pose coverage: {{ (injury["summary"]["coverage"] * 100)|int }}%
+            </p>
+        </div>
+
+        <!-- Summary panel -->
+        <div style="flex:1 1 300px; min-width:220px;">
+            {% if not flags %}
+            <div class="note ok" style="margin-bottom:0;">
+                <i class="fas fa-shield-check"></i>
+                <div>
+                    <strong>No mechanically risky patterns detected.</strong>
+                    {{ injury["summary"]["summary"] }}
+                </div>
+            </div>
+            {% else %}
+            <div style="margin-bottom:10px;">
+                <p style="font-size:0.9rem; margin:0;">{{ injury["summary"]["summary"] }}</p>
+            </div>
+            <div style="font-size:0.78rem; color:var(--text-2); margin-bottom:8px;">
+                <strong>Top concern:</strong> {{ injury["summary"]["top_concern"] }}
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:8px; margin-top:10px;">
+                <div class="metric-card" data-tooltip="High-severity flags detected">
+                    <div class="metric-value" style="color:var(--red);">{{ flags|selectattr("severity","equalto","high")|list|length }}</div>
+                    <div class="metric-label">High</div>
+                </div>
+                <div class="metric-card" data-tooltip="Moderate-severity flags">
+                    <div class="metric-value" style="color:var(--amber);">{{ flags|selectattr("severity","equalto","moderate")|list|length }}</div>
+                    <div class="metric-label">Moderate</div>
+                </div>
+                <div class="metric-card" data-tooltip="Mild-severity flags">
+                    <div class="metric-value" style="color:var(--green);">{{ flags|selectattr("severity","equalto","mild")|list|length }}</div>
+                    <div class="metric-label">Mild</div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if flags %}
+    <div style="margin-top:18px;">
+        <div class="chart-title"><i class="fas fa-list-ul"></i> Detected Patterns &amp; Coaching Advice</div>
+        <div style="display:grid; gap:10px; margin-top:10px;">
+            {% for f in flags %}
+            <div class="injury-flag-row {% if f['severity'] == 'high' %}if-high{% elif f['severity'] == 'moderate' %}if-mod{% else %}if-mild{% endif %}">
+                <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                    <span class="if-sev {{ 'sev-high' if f['severity']=='high' else 'sev-mod' if f['severity']=='moderate' else 'sev-mild' }}">{{ f['severity']|upper }}</span>
+                    <strong style="font-size:0.92rem;">{{ f['label'] }}</strong>
+                    <span class="faint" style="font-size:0.75rem;">{{ f['side'] if f['side'] != 'core' else '' }}</span>
+                </div>
+                <div class="if-body">
+                    <div style="font-size:0.82rem; color:var(--text-2);">{{ f['description'] }}</div>
+                    <div class="if-meta" style="margin-top:6px;">
+                        <span>{{ f['frames'] }} frames ({{ f['pct'] }}%)</span>
+                        <span>Peak: {{ f['peak'] }} {{ f['units'] }}</span>
+                        <span>Phase: {{ f['worst_phase'] }}</span>
+                    </div>
+                    <div class="if-cue">
+                        <i class="fas fa-circle-info" style="font-size:0.7rem;"></i> {{ f['cue'] }}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <p class="small faint" style="margin-top:14px;">
+        <i class="fas fa-triangle-exclamation" style="font-size:0.7rem;"></i>
+        This is an automated screen based on pose estimation, not a medical diagnosis.
+        Consult a sports physio for persistent discomfort or if any flag is consistently high across multiple clips.
+    </p>
+</div>
+{% endif %}
+
+<!-- ================= 6. TABS: CHARTS + ML + FEATURES ================= -->
+{% if charts or ml_insights["available"] or data["features"] %}
+<div class="card">
+    <div class="card-header">
+        <span class="card-icon ic-cyan"><i class="fas fa-chart-area"></i></span>
+        Detailed Analysis
+    </div>
+
+    <div class="tabs">
+        {% if charts %}<button class="tab active" data-target="ov-tab"><i class="fas fa-chart-bar" style="font-size:0.8rem;"></i> Overview</button>{% endif %}
+        {% if charts.get("joint_angles") %}<button class="tab" data-target="ja-tab"><i class="fas fa-ruler-combined" style="font-size:0.8rem;"></i> Joint Angles</button>{% endif %}
+        {% if charts.get("movement") %}<button class="tab" data-target="mv-tab"><i class="fas fa-wave-square" style="font-size:0.8rem;"></i> Movement</button>{% endif %}
+        {% if ml_insights["available"] %}<button class="tab" data-target="ml-tab"><i class="fas fa-brain" style="font-size:0.8rem;"></i> ML Insights</button>{% endif %}
+        {% if data["features"] %}<button class="tab" data-target="feat-tab"><i class="fas fa-list" style="font-size:0.8rem;"></i> All Features</button>{% endif %}
+    </div>
+
+    <!-- Overview Tab -->
+    {% if charts %}
+    <div class="tab-panel active" id="ov-tab">
+        {% if charts.get("phase") %}
+        <div class="chart-container">
+            <div class="chart-title"><i class="fas fa-chart-simple"></i> Phase Distribution</div>
+            <img src="{{ url_for('result_image', video_name=data['video_name'], filename=charts['phase']) }}" alt="Phase distribution" class="chart-zoomable" style="cursor:zoom-in;">
+        </div>
+        {% endif %}
+        {% if plot_name %}
+        <div class="chart-container">
+            <div class="chart-title"><i class="fas fa-chart-line"></i> Joint Angle Time-Series</div>
+            <img src="{{ url_for('result_image', video_name=data['video_name'], filename=plot_name) }}" alt="Joint angle overview" class="chart-zoomable" style="cursor:zoom-in;">
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Joint Angles Tab -->
+    <div class="tab-panel" id="ja-tab">
+        <div class="chart-container">
+            <div class="chart-title"><i class="fas fa-ruler-combined"></i> Joint Angles Over Time</div>
+            <img src="{{ url_for('result_image', video_name=data['video_name'], filename=charts['joint_angles']) }}" alt="Joint angles over time" class="chart-zoomable" style="cursor:zoom-in;">
+        </div>
+    </div>
+
+    <!-- Movement Tab -->
+    <div class="tab-panel" id="mv-tab">
+        <div class="chart-container">
+            <div class="chart-title"><i class="fas fa-wave-square"></i> Movement Score Over Time</div>
+            <img src="{{ url_for('result_image', video_name=data['video_name'], filename=charts['movement']) }}" alt="Movement score over time" class="chart-zoomable" style="cursor:zoom-in;">
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- ML Insights Tab -->
+    {% if ml_insights["available"] %}
+    <div class="tab-panel" id="ml-tab">
+        <div class="ml-grid" style="margin-bottom:16px;">
+            <div class="ml-card">
+                <div class="ml-label">Dataset Size</div>
+                <div class="ml-value">{{ ml_insights["dataset_size"] if ml_insights["dataset_size"] is not none else "—" }} <span style="font-size:0.65em; color:var(--text-3);">videos</span></div>
+            </div>
+            <div class="ml-card">
+                <div class="ml-label">Shot Classes</div>
+                <div class="ml-value">{{ ml_insights["n_classes"] if ml_insights["n_classes"] is not none else "—" }}</div>
+            </div>
+            <div class="ml-card">
+                <div class="ml-label">Best Model (macro F1)</div>
+                <div class="ml-value">{{ ml_insights["best_model"] if ml_insights["best_model"] else "—" }}</div>
+            </div>
+            <div class="ml-card">
+                <div class="ml-label">Evaluation</div>
+                <div class="ml-value" style="font-size:0.9rem;">{{ ml_insights["evaluation"] }}</div>
+            </div>
+            <div class="ml-card" style="border-color:rgba(255,184,77,0.3);">
+                <div class="ml-label">LOOCV Accuracy</div>
+                <div class="ml-value" style="color:var(--amber);">{{ ml_insights["accuracy"] if ml_insights["accuracy"] else "—" }}</div>
+            </div>
+        </div>
+
+        <div class="note info">
+            <i class="fas fa-circle-info"></i>
+            <div>
+                <strong>Exploratory result:</strong> the current dataset is small and
+                this should not be interpreted as reliable real-world performance.
+            </div>
+        </div>
+
+        {% if ml_insights["comparison_table"] %}
+        <div style="margin-top:16px;">
+            <div class="chart-title"><i class="fas fa-table"></i> Model Comparison (LOOCV)</div>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>Model</th><th>Accuracy</th><th>Precision</th><th>Recall</th><th>F1</th></tr></thead>
+                    <tbody>
+                    {% for r in ml_insights["comparison_table"] %}
+                    <tr>
+                        <td><strong>{{ r["model"] }}</strong></td>
+                        <td>{{ "%.1f"|format((r["accuracy"]|float) * 100) }}%</td>
+                        <td>{{ "%.2f"|format(r["precision_macro"]) }}</td>
+                        <td>{{ "%.2f"|format(r["recall_macro"]) }}</td>
+                        <td>{{ "%.2f"|format(r["f1_macro"]) }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <!-- Features Tab -->
+    {% if data["features"] %}
+    <div class="tab-panel" id="feat-tab">
+        <div class="chart-title"><i class="fas fa-list"></i> All Extracted Biomechanics Features ({{ data["features"]|length }})</div>
+        <details open>
+            <summary style="margin-bottom:10px;">Feature table</summary>
+            <div class="table-wrap" style="margin-top:8px;">
+                <table class="feature-tbl">
+                    {% for key, value in data["features"].items() %}
+                    <tr><td>{{ key }}</td><td class="mono" style="background:transparent;border:none;">{{ "%.4f"|format(value) if value is number else value }}</td></tr>
+                    {% endfor %}
+                </table>
+            </div>
+        </details>
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+
+{% if data["features"] %}
+<div class="note faint" style="margin-top:16px;">
+    <i class="fas fa-circle-info" style="font-size:0.75rem;"></i>
+    <div>
+        The input clip lives in <code>input_videos/{{ shot_type or '&lt;shot_type&gt;' }}/</code> and
+        this analysis (metrics, charts and the annotated video) was saved under
+        <code>output_data/&lt;video_name&gt;/</code> and <code>output_videos/</code>.
+        To include it in the research dataset, run <code>build_dataset.py</code> followed by the ML scripts.
+    </div>
+</div>
+{% endif %}
+
+<!-- ================= 7. RECENTLY PROCESSED ================= -->
+{% if recent_videos %}
+<div class="card" style="margin-top:16px;">
+    <div class="card-header">
+        <span class="card-icon ic-blue"><i class="fas fa-clock-rotate-left"></i></span>
+        Recently Processed Videos
+    </div>
+    {% for v in recent_videos %}
+    <a class="video-row" href="{{ v['results_url'] }}" style="{% if v['name'] == data['video_name'] %}background:rgba(77,184,255,0.06); border-left:3px solid var(--accent);{% endif %}">
+        <span class="video-row-icon"><i class="fas fa-video"></i></span>
+        <div>
+            <div class="video-row-name">{{ v["name"] }}{% if v['name'] == data['video_name'] %} <span class="badge b-success" style="font-size:0.6rem; margin-left:6px;">current</span>{% endif %}</div>
+            <div class="video-row-meta">{{ "analysis video" if v["analysis_exists"] else "metrics only" }}</div>
+        </div>
+        {% if v["rating"] is not none %}
+        <span class="rating-chip r-{{ v['rating']|int }}" title="Shot rating (0-10)">{{ "%.1f"|format(v["rating"]) }}</span>
+        {% endif %}
+        {% if v["shot_type"] %}<span class="badge b-{{ v['shot_type'] }}">{{ v["shot_type"] }}</span>{% endif %}
+    </a>
+    {% endfor %}
+</div>
+{% endif %}
+
+</div>
+
+{% if has_analysis %}
+<script>
+(function () {
+    var video = document.getElementById("analysisVideo");
+    var repeatSelect = document.getElementById("repeatSelect");
+    var replayBtn = document.getElementById("replayBtn");
+    var countdown = 0;
+
+    function applyRepeatMode() {
+        var mode = repeatSelect.value;
+        if (mode === "loop") {
+            video.loop = true;
+            countdown = 0;
+        } else {
+            video.loop = false;
+            countdown = parseInt(mode, 10) || 1;
+        }
+    }
+
+    repeatSelect.addEventListener("change", applyRepeatMode);
+    replayBtn.addEventListener("click", function () {
+        video.currentTime = 0;
+        if (video.paused) { video.play(); }
+    });
+    video.addEventListener("ended", function () {
+        if (!video.loop && countdown > 1) {
+            countdown -= 1;
+            video.currentTime = 0;
+            video.play();
+        }
+    });
+
+    applyRepeatMode();
+})();
+</script>
+{% endif %}
+{% endblock %}

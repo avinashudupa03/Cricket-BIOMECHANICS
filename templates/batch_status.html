@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Batch Processing &mdash; CricBiomech AI{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <div>
+        <h1><i class="fas fa-layer-group" style="color:var(--accent); font-size:0.85em;"></i> Batch Processing</h1>
+        <p class="subtitle">Re-processing all input videos in parallel with the full pipeline.</p>
+    </div>
+</div>
+
+<div class="page-body">
+    <div class="card" style="margin-bottom:16px;">
+        <div class="card-header">
+            <span class="card-icon ic-blue"><i class="fas fa-spinner fa-spin"></i></span>
+            Progress
+        </div>
+        <div id="batch-progress" style="padding:16px 0;">
+            <p style="font-size:1rem; margin:0 0 8px 0;">
+                <strong id="bp-current">{{ batch["current"] }}</strong>
+            </p>
+            <div class="progress-bar-wrap" style="height:8px; background:var(--surface-3); border-radius:9999px; overflow:hidden;">
+                <div id="bp-bar" class="progress-bar" style="width:0%; height:100%; background:var(--accent); border-radius:9999px; transition:width 0.5s ease;"></div>
+            </div>
+            <p id="bp-count" class="faint" style="margin-top:6px; font-size:0.85rem;">0 / 0 videos</p>
+        </div>
+        <div id="bp-done" style="display:none; padding:16px 0;">
+            <div class="note ok">
+                <i class="fas fa-circle-check"></i>
+                <div><strong>Batch complete.</strong> <span id="bp-summary"></span></div>
+            </div>
+        </div>
+        <div id="bp-error" style="display:none; padding:16px 0;">
+            <div class="note danger">
+                <i class="fas fa-circle-xmark"></i>
+                <div><strong>Batch failed.</strong> <span id="bp-errmsg"></span></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="bp-results" class="card" style="display:none;">
+        <div class="card-header">
+            <span class="card-icon ic-green"><i class="fas fa-list-check"></i></span>
+            Results
+        </div>
+        <div id="bp-result-list" style="padding:8px 0;"></div>
+    </div>
+
+    <div style="margin-top:16px;">
+        <a class="btn" href="{{ url_for('dashboard') }}">
+            <i class="fas fa-arrow-left"></i> Back to Dashboard
+        </a>
+    </div>
+</div>
+
+<script>
+(function(){
+    const batchId = "{{ batch_id }}";
+    const url = "/batch_status_json/" + batchId;
+    const bar = document.getElementById("bp-bar");
+    const current = document.getElementById("bp-current");
+    const count = document.getElementById("bp-count");
+    const doneDiv = document.getElementById("bp-done");
+    const summary = document.getElementById("bp-summary");
+    const errorDiv = document.getElementById("bp-error");
+    const errmsg = document.getElementById("bp-errmsg");
+    const progressDiv = document.getElementById("batch-progress");
+    const resultsCard = document.getElementById("bp-results");
+    const resultList = document.getElementById("bp-result-list");
+
+    function poll() {
+        fetch(url).then(r => r.json()).then(d => {
+            if (d.state === "missing") return;
+            const pct = d.total > 0 ? (d.completed / d.total * 100) : 0;
+            bar.style.width = pct + "%";
+            current.textContent = d.current;
+            count.textContent = d.completed + " / " + d.total + " videos";
+
+            if (d.state === "done") {
+                progressDiv.style.display = "none";
+                if (d.ok) {
+                    doneDiv.style.display = "block";
+                    summary.textContent = d.completed + " videos processed successfully.";
+                } else {
+                    errorDiv.style.display = "block";
+                    errmsg.textContent = d.error || "Unknown error.";
+                }
+                if (d.results && d.results.length > 0) {
+                    resultsCard.style.display = "block";
+                    let html = "";
+                    for (const r of d.results) {
+                        const cls = r.ok ? "note ok" : "note danger";
+                        const ico = r.ok ? "fa-circle-check" : "fa-circle-xmark";
+                        html += '<div class="' + cls + '" style="margin:4px 8px; padding:10px 14px;">' +
+                            '<i class="fas ' + ico + '"></i>' +
+                            '<div><strong>' + r.name + '</strong> <span class="faint" style="font-size:0.8rem;">' + r.shot_type + '</span></div></div>';
+                    }
+                    resultList.innerHTML = html;
+                }
+                return;
+            }
+            setTimeout(poll, 1200);
+        }).catch(() => setTimeout(poll, 3000));
+    }
+    poll();
+})();
+</script>
+
+{% endblock %}

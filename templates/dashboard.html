@@ -1,0 +1,317 @@
+{% extends "base.html" %}
+{% block title %}Dashboard &mdash; CricBiomech AI{% endblock %}
+{% block content %}
+
+<!-- ================= PAGE HEADER ================= -->
+<div class="page-header">
+    <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap;">
+        <div>
+            <h1><i class="fas fa-chart-line" style="color:var(--accent); font-size:0.85em;"></i> Analytics Dashboard</h1>
+            <p class="subtitle">All figures read dynamically from the generated dataset and reports.</p>
+        </div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <a class="btn btn-primary" href="{{ url_for('upload_form') }}">
+                <i class="fas fa-cloud-arrow-up"></i>
+                Analyse a Shot
+            </a>
+            {% if stats['total_videos'] > 0 %}
+            <form method="POST" action="{{ url_for('batch_process') }}" style="margin:0;">
+                <button class="btn" type="submit" title="Re-process all videos in parallel with the latest pipeline"
+                        style="background:var(--surface-3); color:var(--text);">
+                    <i class="fas fa-layer-group"></i>
+                    Re-process All
+                </button>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="page-body">
+
+    <!-- ================= SUMMARY CARDS ================= -->
+    <div class="grid g4" style="margin-bottom:20px;">
+        <div class="stat-card" data-color="blue">
+            <div class="stat-icon ic-blue"><i class="fas fa-video"></i></div>
+            <div class="stat-value" data-counter="{{ stats['total_videos'] }}">{{ stats["total_videos"] }}</div>
+            <div class="stat-label">Videos Processed</div>
+            <div class="stat-footer">Samples in the research dataset</div>
+        </div>
+        <div class="stat-card" data-color="green">
+            <div class="stat-icon ic-green"><i class="fas fa-crosshairs"></i></div>
+            <div class="stat-value">{{ stats["n_classes"] }}</div>
+            <div class="stat-label">Shot Classes</div>
+            <div class="stat-footer">
+                {% for c in stats["class_names"] %}
+                <span class="badge b-{{ c }}">{{ c }}</span>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="stat-card" data-color="purple">
+            <div class="stat-icon ic-purple"><i class="fas fa-ruler-combined"></i></div>
+            <div class="stat-value" data-counter="{{ stats['n_features'] }}">{{ stats["n_features"] }}</div>
+            <div class="stat-label">Biomechanics Features</div>
+            <div class="stat-footer">Extracted per video sample</div>
+        </div>
+        <div class="stat-card" data-color="amber">
+            <div class="stat-icon ic-amber"><i class="fas fa-microchip"></i></div>
+            <div class="stat-value" style="font-size:1.1rem; line-height:1.3;">{{ ml_insights["evaluation"] if ml_insights["available"] else "—" }}</div>
+            <div class="stat-label">ML Evaluation Method</div>
+            <div class="stat-footer">Cross-validation on current dataset</div>
+        </div>
+    </div>
+
+    <!-- ================= EXPLORATORY WARNING ================= -->
+    {% if stats["dataset_exists"] and stats["total_videos"] < 30 %}
+    <div class="note warn" style="margin-bottom:20px;">
+        <i class="fas fa-triangle-exclamation"></i>
+        <div>
+            <strong>Exploratory results.</strong> The current dataset has only
+            <strong>{{ stats["total_videos"] }} samples</strong>. Model metrics are
+            around chance level and should <em>not</em> be relied upon for
+            real-world generalization.
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- ================= SHOT DISTRIBUTION + RECENT ================= -->
+    <div class="grid g2x">
+        <!-- Shot Distribution -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-icon ic-green"><i class="fas fa-chart-simple"></i></span>
+                Shot Distribution
+            </div>
+            {% if stats["distribution"] %}
+                {% set maxc = stats["distribution"].values() | max %}
+                {% for shot, count in stats["distribution"].items() %}
+                <div class="dist-row">
+                    <span class="dist-label"><span class="badge b-{{ shot }}">{{ shot }}</span></span>
+                    <div class="dist-bar">
+                        {% set pct = (count / maxc * 100) | round %}
+                        <div class="dist-fill" style="width: {{ pct }}%;
+                            {% if shot == 'cut' %}background:var(--purple)
+                            {% elif shot == 'defence' %}background:var(--cyan)
+                            {% elif shot == 'drive' %}background:var(--green)
+                            {% elif shot == 'flick' %}background:var(--amber)
+                            {% else %}background:var(--surface-3){% endif %}">{{ count }}</div>
+                    </div>
+                    <span class="dist-pct">{{ "%.0f"|format(count / stats["total_videos"] * 100) }}%</span>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div style="text-align:center; padding:30px 0; color:var(--text-3);">
+                    <i class="fas fa-chart-bar" style="font-size:28px; margin-bottom:10px; display:block;"></i>
+                    No dataset found yet. Run <code>build_dataset.py</code> first.
+                </div>
+            {% endif %}
+        </div>
+
+        <!-- Recently Processed -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-icon ic-blue"><i class="fas fa-clock-rotate-left"></i></span>
+                Recently Processed
+            </div>
+            {% if recent_videos %}
+                {% for v in recent_videos %}
+                <a class="video-row" href="{{ v['results_url'] }}">
+                    <span class="video-row-icon"><i class="fas fa-video"></i></span>
+                    <div>
+                        <div class="video-row-name">{{ v["name"] }}</div>
+                        <div class="video-row-meta">{{ "analysis video" if v["analysis_exists"] else "metrics only" }}</div>
+                    </div>
+                    {% if v["rating"] is not none %}
+                    <span class="rating-chip r-{{ v['rating']|int }}" title="Shot rating (0-10)">{{ "%.1f"|format(v["rating"]) }}</span>
+                    {% endif %}
+                    {% if v["shot_type"] %}<span class="badge b-{{ v['shot_type'] }}">{{ v["shot_type"] }}</span>{% endif %}
+                </a>
+                {% endfor %}
+            {% else %}
+                <div style="text-align:center; padding:30px 0; color:var(--text-3);">
+                    <i class="fas fa-video" style="font-size:28px; margin-bottom:10px; display:block;"></i>
+                    No processed videos yet. Upload one to get started.
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ================= SHOT RATINGS ================= -->
+    {% set rated = recent_videos | selectattr("rating", "ne", none) | list %}
+    {% if rated %}
+    <div class="card" style="margin-bottom:20px;">
+        <div class="card-header">
+            <span class="card-icon ic-green"><i class="fas fa-star"></i></span>
+            Recent Shot Ratings
+            <span style="margin-left:auto;" class="small faint">
+                Deterministic 0-10 scoring &middot; see each result page for the factor breakdown
+            </span>
+        </div>
+        {% for v in rated %}
+        <a class="video-row" href="{{ v['results_url'] }}">
+            <span class="video-row-icon"><i class="fas fa-star" style="color:var(--gold, #ffd166);"></i></span>
+            <div style="flex:1 1 auto;">
+                <div class="video-row-name">{{ v["name"] }}</div>
+                <div class="video-row-meta">{{ v["shot_type"] or "unknown shot type" }}</div>
+            </div>
+            <div style="flex:0 1 240px; display:flex; align-items:center; gap:10px; width:min(240px,40vw);">
+                <div class="rating-gauge" data-rating="{{ v['rating'] }}" style="flex:1 1 auto;"><div class="rating-marker"></div></div>
+                <span class="rating-chip r-{{ v['rating']|int }}" style="flex:0 0 auto;">{{ "%.1f"|format(v["rating"]) }} / 10</span>
+            </div>
+        </a>
+        {% endfor %}
+        <p class="small faint" style="margin-top:12px;">
+            <i class="fas fa-circle-info" style="font-size:0.7rem;"></i>
+            Scale: 0-4.9 Poor &middot; 5-5.9 Below Average &middot; 6-6.9 Average &middot;
+            7-7.9 Good &middot; 8-8.9 Very Good &middot; 9-10 Excellent.
+        </p>
+    </div>
+    {% endif %}
+
+    <!-- ================= RESEARCH INSIGHTS ================= -->
+    <div class="section" id="ml">
+        <div class="section-header">
+            <h2><i class="fas fa-brain" style="color:var(--purple); font-size:0.85em;"></i> ML Performance Insights</h2>
+            <p>Key takeaways and model performance on the current exploratory dataset.</p>
+        </div>
+
+        <div class="ml-grid">
+            <div class="ml-card">
+                <div class="ml-label">Dataset Size</div>
+                <div class="ml-value">{{ ml_insights["dataset_size"] if ml_insights["dataset_size"] is not none else "—" }} <span style="font-size:0.7em; font-weight:500; color:var(--text-3);">videos</span></div>
+            </div>
+            <div class="ml-card">
+                <div class="ml-label">Shot Classes</div>
+                <div class="ml-value">{{ ml_insights["n_classes"] if ml_insights["n_classes"] is not none else "—" }}</div>
+            </div>
+            <div class="ml-card">
+                <div class="ml-label">Best Model</div>
+                <div class="ml-value">{{ ml_insights["best_model"] if ml_insights["best_model"] else "—" }}</div>
+            </div>
+            <div class="ml-card">
+                <div class="ml-label">Evaluation</div>
+                <div class="ml-value" style="font-size:0.95rem;">{{ ml_insights["evaluation"] }}</div>
+            </div>
+            <div class="ml-card" style="border-color: rgba(255,184,77,0.3);">
+                <div class="ml-label">LOOCV Accuracy</div>
+                <div class="ml-value" style="color:var(--amber);">{{ ml_insights["accuracy"] if ml_insights["accuracy"] else "—" }}</div>
+            </div>
+        </div>
+
+        <div class="note info">
+            <i class="fas fa-circle-info"></i>
+            <div>
+                <strong>Exploratory result:</strong> the current dataset is small and
+                results should <em>not</em> be interpreted as reliable real-world
+                performance. Accuracy is at chance level due to limited samples.
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= ANALYSIS REPORTS ================= -->
+    <div class="section" id="reports">
+        <div class="section-header">
+            <h2><i class="fas fa-file-lines" style="color:var(--accent); font-size:0.85em;"></i> Reports &amp; Visualisations</h2>
+        </div>
+
+        {% if ml_insights["comparison_table"] %}
+        <div class="card" style="margin-bottom:16px;">
+            <div class="card-header">
+                <span class="card-icon ic-blue"><i class="fas fa-microchip"></i></span>
+                Model Comparison (LOOCV)
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>Model</th><th>Accuracy</th><th>Precision</th><th>Recall</th><th>F1 (macro)</th></tr></thead>
+                    <tbody>
+                    {% set cmp = ml_insights["comparison_table"] %}
+                    {% if cmp %}
+                        {% for r in cmp %}
+                        <tr>
+                            <td><strong>{{ r["model"] }}</strong></td>
+                            <td>{{ "%.1f"|format((r["accuracy"]|float) * 100) }}%</td>
+                            <td>{{ "%.2f"|format(r["precision_macro"]) }}</td>
+                            <td>{{ "%.2f"|format(r["recall_macro"]) }}</td>
+                            <td>{{ "%.2f"|format(r["f1_macro"]) }}</td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr><td colspan="5" class="muted" style="text-align:center;">No comparison data available.</td></tr>
+                    {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="grid g2">
+            {% if model_files["confusion_matrix.png"] %}
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-icon ic-red"><i class="fas fa-table-cells"></i></span>
+                    Confusion Matrix
+                </div>
+                <div class="chart-container">
+                    <img src="{{ url_for('report_file', filename='confusion_matrix.png') }}" alt="Confusion Matrix" class="hoverable chart-zoomable">
+                </div>
+            </div>
+            {% endif %}
+            {% if model_files["feature_importance.png"] %}
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-icon ic-purple"><i class="fas fa-ranking-star"></i></span>
+                    Feature Importance
+                </div>
+                <div class="chart-container">
+                    <img src="{{ url_for('report_file', filename='feature_importance.png') }}" alt="Feature Importance" class="hoverable chart-zoomable">
+                </div>
+                <p class="small faint" style="margin-top:8px;">RandomForest-based interpretability model.</p>
+            </div>
+            {% endif %}
+        </div>
+
+        {% if model_files["feature_importance.csv"] or model_files["classification_report.txt"] or model_files["model_results_summary.txt"] %}
+        <div class="grid g2" style="margin-top:16px;">
+            {% if model_files["feature_importance.csv"] %}
+            <div class="card">
+                <div class="card-header">Feature Importance (top 15)</div>
+                <pre>{{ model_files["feature_importance.csv"] }}</pre>
+            </div>
+            {% endif %}
+            {% if model_files["classification_report.txt"] %}
+            <div class="card">
+                <div class="card-header">Classification Report</div>
+                <pre>{{ model_files["classification_report.txt"] }}</pre>
+            </div>
+            {% endif %}
+            {% if model_files["model_results_summary.txt"] %}
+            <div class="card">
+                <div class="card-header">Model Results Summary</div>
+                <pre>{{ model_files["model_results_summary.txt"] }}</pre>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- ================= EDA ================= -->
+    {% if eda_images %}
+    <div class="section">
+        <div class="section-header">
+            <h2><i class="fas fa-magnifying-glass-chart" style="color:var(--cyan); font-size:0.85em;"></i> Exploratory Data Analysis</h2>
+        </div>
+        <div class="grid g2">
+            {% for img in eda_images %}
+            <div class="card">
+                <div class="chart-container" style="margin-bottom:0;">
+                    <img src="{{ url_for('report_file', filename='eda/' ~ img) }}" alt="{{ img }}" class="chart-zoomable" style="cursor:zoom-in;">
+                </div>
+                <p class="small faint" style="margin-top:8px;">{{ img }}</p>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+</div>
+{% endblock %}
