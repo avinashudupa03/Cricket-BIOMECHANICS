@@ -55,6 +55,46 @@ ANALYSIS_VIDEOS = BASE_DIR / "output_videos"
 # Legacy alias used by the web app for serving/serving-checking analysis files.
 OUTPUT_VIDEOS = ANALYSIS_VIDEOS
 
+# ---------------------------------------------------------------------------
+# Frame pre-processing (pose-detection robustness)
+# ---------------------------------------------------------------------------
+# CLAHE contrast enhancement applied to every frame *before* pose detection so
+# dark / unevenly-lit clips still yield reliable keypoints. It is
+# geometry-preserving (only pixel intensity changes; normalized landmark
+# coordinates, angles and phase windows stay valid) but costs a little CPU.
+# Override with CBAI_PREPROCESS_ENABLE / CBAI_PREPROCESS_CLAHE_CLIP /
+# CBAI_PREPROCESS_CLAHE_GRID.
+def _env_bool(name, default):
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_float(name, default):
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _env_int(name, default):
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+PREPROCESS_ENABLE = _env_bool("CBAI_PREPROCESS_ENABLE", True)
+PREPROCESS_CLAHE_CLIP = _env_float("CBAI_PREPROCESS_CLAHE_CLIP", 2.0)
+PREPROCESS_CLAHE_GRID = max(1, _env_int("CBAI_PREPROCESS_CLAHE_GRID", 8))
+
 # Temporary staging folder for uploads BEFORE they are validated and moved
 # into input_videos/<shot_type>/ exactly once. Files here are never scanned
 # by the pipeline, so partial/duplicate uploads cannot pollute the dataset.

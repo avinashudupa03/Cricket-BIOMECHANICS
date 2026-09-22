@@ -59,7 +59,8 @@ class LandmarkExtractor:
             "frame",
             "timestamp_ms",
             "tracking_ok",
-            "tracking_confidence"
+            "tracking_confidence",
+            "interpolated"
         ]
 
         for name in self.landmark_names:
@@ -67,7 +68,9 @@ class LandmarkExtractor:
             header.extend([
                 f"{name}_x",
                 f"{name}_y",
-                f"{name}_z"
+                f"{name}_z",
+                f"{name}_visibility",
+                f"{name}_presence"
             ])
 
         return header
@@ -78,7 +81,8 @@ class LandmarkExtractor:
         timestamp_ms,
         pose,
         tracking_ok=False,
-        tracking_confidence=0.0
+        tracking_confidence=0.0,
+        interpolated=False
     ):
 
         """Return one CSV row for a frame, including per-frame tracking state.
@@ -86,12 +90,22 @@ class LandmarkExtractor:
         tracking_ok / tracking_confidence let downstream steps (and the
         results page) distinguish reliably-tracked batsman poses from
         TRACKING UNCERTAIN frames where the identity lock was withheld.
+
+        interpolated marks frames whose landmark coordinates were filled by
+        short-gap temporal interpolation (a continuity estimate, never a
+        freshly-detected pose). Downstream consumers can decide whether to
+        include interpolated frames in their metrics.
+
+        Each landmark row carries the MediaPipe per-landmark ``visibility``
+        and ``presence`` scores (0..1) so angle/feature math can *filter* on
+        landmark reliability instead of using every coordinate blindly.
         """
         row = [
             frame_number,
             timestamp_ms,
             int(bool(tracking_ok)),
-            round(float(tracking_confidence), 4)
+            round(float(tracking_confidence), 4),
+            int(bool(interpolated))
         ]
 
         if pose is None:
@@ -99,6 +113,8 @@ class LandmarkExtractor:
             for _ in self.landmark_names:
 
                 row.extend([
+                    "",
+                    "",
                     "",
                     "",
                     ""
@@ -111,7 +127,9 @@ class LandmarkExtractor:
                 row.extend([
                     landmark.x,
                     landmark.y,
-                    landmark.z
+                    landmark.z,
+                    getattr(landmark, "visibility", ""),
+                    getattr(landmark, "presence", "")
                 ])
 
         return row

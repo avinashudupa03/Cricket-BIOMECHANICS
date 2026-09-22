@@ -23,6 +23,7 @@ import phase_detector
 import biomechanics_analyzer
 import shot_rater
 import injury_risk
+import provenance
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -51,6 +52,9 @@ def main():
         print(f"RUNNING: {token}")
         print("=" * 56)
         run()
+
+    provenance.write_provenance(BASE_DIR / "output_data" / video_name)
+    provenance.write_report_header()
 
     print()
     print("=" * 56)

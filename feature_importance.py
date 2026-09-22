@@ -36,6 +36,7 @@ def main():
     feature_columns = [
         c for c in df.columns
         if c not in META_COLUMNS and c != "shot_type"
+        and not c.startswith("quality_")
     ]
     X_raw = df[feature_columns].astype(float)
 
@@ -61,10 +62,10 @@ def main():
     # be used safely on small multi-class data.
     # ------------------------------------------------------------------
     print()
-    print("NOTE: The best classifier selected in train_models.py was")
-    print("LogisticRegression, which does not expose native feature")
-    print("importance. A RandomForest is therefore used here as the")
-    print("interpretability model to rank the biomechanics features.")
+    print("NOTE: The classifier selected as best in train_models.py (by macro")
+    print("F1) may not expose native feature importance. A RandomForest is")
+    print("used here as the interpretability model to rank the biomechanics")
+    print("features - an approximation of which signals drive the separation.")
     print()
 
     pipeline = RandomForestClassifier(

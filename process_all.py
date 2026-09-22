@@ -4,10 +4,16 @@ Multiple videos are analysed in parallel via a process pool. Each worker
 runs the full per-video pipeline (process_video.py) in its own Python
 process so MediaPipe, OpenCV and pandas never share memory.
 
+Incremental by default: videos whose analysis outputs already exist are
+skipped, so adding a handful of new clips to input_videos/ and re-running
+`python process_all.py` only processes the new ones. Use --force to
+re-process everything (e.g. after tuning tracking parameters).
+
 Usage:
     python process_all.py                 # auto-detect worker count
     python process_all.py --workers 4     # force 4 parallel workers
-    python process_all.py --workers 1     # sequential (original behaviour)
+    python process_all.py --force         # re-process already-analysed videos
+    python process_all.py -n              # show what would run, without running
 """
 
 import argparse
@@ -21,6 +27,20 @@ from pathlib import Path
 from config import MAX_WORKERS, NO_CONSOLE_FLAGS, is_generated_filename
 
 VIDEO_EXTENSIONS = {".avi", ".mp4", ".mov", ".mkv"}
+OUTPUT_ROOT = Path(__file__).resolve().parent / "output_data"
+DONE_MARKER = "biomechanics_features.csv"
+
+
+def _already_processed(video_path):
+    """True when a usable analysis output already exists for this video.
+
+    The output folder name is the source stem (e.g. input_videos/drive/abc.avi
+    -> output_data/abc/). We only skip when the feature CSV is actually
+    present and non-empty, so a failed/partial earlier run is retried.
+    """
+    out_dir = OUTPUT_ROOT / video_path.stem
+    marker = out_dir / DONE_MARKER
+    return marker.is_file() and marker.stat().st_size > 0
 
 
 def _process_one(video_path):
@@ -66,6 +86,16 @@ def main():
         default=MAX_WORKERS,
         help=f"Number of parallel workers (default: {MAX_WORKERS}, auto-detected).",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-process videos that already have analysis outputs.",
+    )
+    parser.add_argument(
+        "-n", "--dry-run",
+        action="store_true",
+        help="List videos that would be processed, without processing.",
+    )
     args = parser.parse_args()
     workers = max(1, args.workers)
 
@@ -82,13 +112,25 @@ def main():
         print("No videos found in input_videos.")
         return
 
+    if not args.force:
+        videos = [v for v in videos if not _already_processed(v)]
+
     print()
     print("===================================")
     print("BATCH CRICKET BIOMECHANICS ANALYSIS")
     print("===================================")
-    print(f"Videos found:  {len(videos)}")
-    print(f"Workers:       {workers}")
+    print(f"Workers:             {workers}")
+    print(f"Mode:                "
+          f"{'force (all videos)' if args.force else 'incremental (new/retry only)'}")
+    print(f"Videos to process:   {len(videos)}")
     print()
+
+    if args.dry_run or not videos:
+        for v in videos:
+            print(f"  - {v}")
+        if not videos and not args.force:
+            print("(nothing new to do - all videos are already analysed)")
+        return
 
     completed = []
     failed = []

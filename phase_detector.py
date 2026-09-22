@@ -137,6 +137,45 @@ def main(argv=None):
 
     total_frames = len(df)
 
+    # ------------------------------------------------------------------
+    # Robust impact detection. A single global movement peak is noisy: it
+    # can be dragged to the clip edges by the batsman walking to/from the
+    # crease, or by a speck of keypoint jitter. The bat (lead hand) reaches
+    # its lowest vertical point very near ball contact, so when a reliable
+    # lead-wrist-height signal exists we cross-check the movement peak
+    # against the wrist-height minimum and trust the wrist cue when the two
+    # agree (within a tolerance window). Individual frames are therefore
+    # never allowed to misplace the phases on their own.
+    # ------------------------------------------------------------------
+    imp_from_wrist = False
+    impact_frame = peak_frame
+    if "lead_wrist_height" in df.columns:
+        wh = pd.to_numeric(df["lead_wrist_height"], errors="coerce")
+        wh = wh.rolling(
+            3, center=True, min_periods=1
+        ).mean()
+        wh = wh.dropna()
+        if len(wh):
+            wrist_min_frame = int(wh.idxmin())
+            # Tolerance window: wrist minimum must sit near the movement peak
+            # to be trusted. Kept generous (rel. to clip length) so real
+            # contacts are not rejected, tight enough to reject edge noise.
+            window = max(3, int(total_frames * 0.20))
+            if abs(wrist_min_frame - peak_frame) <= window:
+                impact_frame = wrist_min_frame
+                imp_from_wrist = True
+
+    # Never let a spurious edge event place impact inside the first/last
+    # tiny slice unless the clip is very short (then phases are coarse anyway).
+    edge_margin = max(2, int(total_frames * 0.05))
+    if total_frames > 2 * edge_margin + 1:
+        lo = edge_margin
+        hi = total_frames - 1 - edge_margin
+        if impact_frame < lo:
+            impact_frame = lo
+        if impact_frame > hi:
+            impact_frame = hi
+
     # Adaptive phase windows: size the loading phases by *actual* framerate
     # (targeting typical swing durations in seconds), then clamp to a fraction
     # of the clip so very short recordings degrade gracefully instead of
@@ -160,12 +199,12 @@ def main(argv=None):
 
     impact_start = max(
         0,
-        peak_frame - 1
+        impact_frame - 1
     )
 
     impact_end = min(
         total_frames - 1,
-        peak_frame + 1
+        impact_frame + 1
     )
 
     downswing_start = max(
@@ -213,9 +252,11 @@ def main(argv=None):
     print(f"Video: {video_name}")
     print(f"Frames analysed: {total_frames}")
     print(f"Peak movement frame: {peak_frame}")
+    print(f"Impact frame: {impact_frame} "
+          f"({'from wrist-height minimum' if imp_from_wrist else 'from movement peak'})")
     print(
-        f"Peak movement time: "
-        f"{df.loc[peak_frame, 'timestamp_ms']} ms"
+        f"Impact time: "
+        f"{df.loc[impact_frame, 'timestamp_ms']} ms"
     )
 
     print()

@@ -204,20 +204,81 @@ def main():
                 f"(phase not detected -> count 0) and cast to integer."
             )
 
-    # Replace any remaining missing numeric values with 0 as a conservative
-    # fallback (no silent deletion).
+    # Rate features where 0 is a legitimate "nothing measured" value (no valid
+    # swing frames -> no swing speed). 0 is a meaningful absence here.
+    zero_fill_allowlist = {
+        "bat_speed_torso_per_s",
+        "bat_speed_mean_torso_per_s",
+    }
+
+    # Caps throughput of per-column missing data. Features missing MORE than
+    # this fraction of the (already tiny) dataset cannot be estimated
+    # reliably - median/zero imputation would fabricate biomechanics values
+    # the tracker never saw. Such columns are dropped instead of faked.
+    MAX_MISSING_FRACTION = 0.30
+
+    columns_to_drop = []
     for col in cleaned.columns:
         if col in NON_NUMERIC_COLUMNS:
             continue
         n_na = int(cleaned[col].isna().sum())
-        if n_na > 0:
-            cleaned[col] = cleaned[col].fillna(0)
-            print(
-                f"    Filled {n_na} remaining missing value(s) in '{col}' "
-                f"with 0."
-            )
+        if n_na == 0:
+            continue
+        frac = n_na / len(cleaned)
+        if frac > MAX_MISSING_FRACTION:
+            columns_to_drop.append(col)
+    cleaned = cleaned.drop(columns=columns_to_drop)
+    if columns_to_drop:
+        drop_cols.extend(columns_to_drop)
+        print(
+            f"    Dropped {len(columns_to_drop)} column(s) missing in more "
+            f"than {MAX_MISSING_FRACTION:.0%} of samples (unreliable to "
+            f"estimate at n={len(cleaned)}):"
+        )
+        for col in columns_to_drop:
+            print(f"      - {col}")
+
+    # Replace remaining missing numeric values: median of the observed values
+    # for continuous posture/angle features (never a fabricated 0, which would
+    # read as "wrist at ground level" or "joint angle 0 deg"), and 0 only for
+    # the explicit count/rate allowlist above. Record which cells were filled
+    # so the imputation is transparent.
+    filled_cells = 0
+    filled_details = []
+    for col in cleaned.columns:
+        if col in NON_NUMERIC_COLUMNS:
+            continue
+        n_na = int(cleaned[col].isna().sum())
+        if n_na == 0:
+            continue
+        if col in zero_fill_allowlist:
+            fill_value = 0
+            reason = "no measurable value (0 is meaningful absence)"
+        else:
+            fill_value = cleaned[col].median()
+            reason = "median of observed values"
+        before_ids = cleaned.index[cleaned[col].isna()].tolist()
+        cleaned[col] = cleaned[col].fillna(fill_value)
+        filled_cells += n_na
+        filled_details.append((col, n_na, fill_value, reason, before_ids))
+        print(
+            f"    Filled {n_na} missing value(s) in '{col}' with "
+            f"{fill_value:.4g} ({reason})."
+        )
+
+    if filled_details:
+        np.save(
+            output_root / "imputation_log.npy",
+            np.array(
+                [(c, n, f"{v:.4g}", r) for c, n, v, r, _ in filled_details],
+                dtype=object,
+            ),
+            allow_pickle=True,
+        )
+        print(f"    Saved imputation log to {output_root / 'imputation_log.npy'}")
 
     # Replace infinite values with NaN then fill with 0.
+    numeric_cols = [c for c in cleaned.columns if c not in NON_NUMERIC_COLUMNS]
     inf_found = int(cleaned[numeric_cols].apply(
         lambda s: np.isinf(pd.to_numeric(s, errors="coerce")).sum()
     ).sum())

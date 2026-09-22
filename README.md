@@ -43,6 +43,11 @@ cricket-biomechanics-ai/
 ├── output_video.py         # Renders annotated analysis video
 ├── plot_angles.py          # Angle time-series plots
 │
+├── video_preprocess.py      # Geometry-preserving CLAHE frame enhancement
+├── provenance.py            # Scientific-validity labeling of every output
+├── data_quality.py          # Dataset validation checks
+├── robustness_report.py     # Honest capability audit (tested vs untested)
+│
 ├── feature_engineering.py  # Builds ML feature matrix
 ├── build_dataset.py        # Assembles dataset from videos
 ├── prepare_ml_data.py      # Cleans + prepares ML data
@@ -52,6 +57,7 @@ cricket-biomechanics-ai/
 ├── feature_importance.py   # Feature importance analysis
 ├── eda.py                  # Exploratory data analysis
 ├── data_validation.py      # Dataset validation
+├── smoke_test.py           # Headless self-test of the pipeline
 │
 ├── report_generator.py     # Text/CSV report generation
 ├── templates/              # Flask HTML templates
@@ -128,7 +134,104 @@ python evaluate_models.py   # generate evaluation reports
 
 ```bash
 python process_all.py       # process every video in input_videos/
+python process_all.py --force   # re-process videos that already have outputs
+python process_all.py -n        # dry-run: list what would be processed
 ```
+
+`process_all.py` is **incremental by default**: videos whose analysis outputs
+already exist are skipped, so adding new clips under
+`input_videos/<shot_type>/` and re-running only processes the new/retry ones.
+No video names or counts are hardcoded anywhere - everything is discovered by
+scanning `input_videos/`, and each video's shot type comes from its containing
+folder. Videos are processed one per worker process (parallel, bounded memory),
+never all loaded at once, and LOOCV / dataset rows are per-video, so frames
+from one video can never span train and test.
+
+### Adding new videos
+
+```bash
+# 1. Drop new clips into the right class folder:
+#      input_videos/drive/myshot1.avi
+#      input_videos/flick/myshot2.avi
+# 2. Process (only the new ones run):
+python process_all.py
+# 3. Rebuild dataset + retrain + evaluate:
+python build_dataset.py
+python data_validation.py
+python feature_engineering.py
+python prepare_ml_data.py
+python train_models.py
+python evaluate_models.py
+```
+
+### Validation & quality
+
+```bash
+python data_quality.py      # check for duplicates, bad labels, short/poor clips
+python robustness_report.py # honest audit: tested vs untested conditions
+python provenance.py        # (re)label scientific validity of all outputs
+```
+
+### Reproducible full pipeline
+
+```bash
+python process_all.py                     # 1. pose + angles + phases + features
+python build_dataset.py                   # 2. assemble dataset from processed videos
+python data_validation.py                 # 3. clean/impute (logged, no label edits)
+python eda.py                             # 4. exploratory analysis + plots
+python feature_engineering.py             # 5. engineered ML features
+python prepare_ml_data.py                 # 6. prepare feature matrix
+python train_models.py                    # 7. LOOCV training (fixed seed 42)
+python evaluate_models.py                 # 8. evaluation + reports
+python feature_importance.py              # 9. feature importance report
+python data_quality.py                    # 10. final data-quality pass
+```
+All ML stages use a fixed `RANDOM_SEED = 42`; the model comparison artifact is
+`saved to reports/model_comparison.csv`; LOOCV predictions to
+`output_data/ml_preprocessing/loo_predictions.pkl` for downstream auditing.
+
+## Accuracy-critical design decisions
+
+These choices are deliberate and documented in the code with the reasoning
+that justifies them:
+
+- **Single-camera 2D pose estimation** (`pose_extractor.py`) — MediaPipe
+  returns frame-normalised (0..1) coordinates, so resolution and FPS do not
+  change feature values. Each estimated landmark carries visibility/presence
+  scores that downstream math **filters on** rather than trusting blindly
+  (`MIN_VISIBILITY = 0.30`).
+- **Two-pass identity-locked tracking** (`pose_extractor.py`) — candidates
+  are linked into temporal trajectories and the batsman is selected by
+  trajectory score, never by fresh detection per frame. This is what prevents
+  identity switches to the keeper/non-striker in multi-person footage.
+- **Geometry-preserving CLAHE enhancement** (`video_preprocess.py`) — improves
+  dark/low-contrast clips *before* detection by changing only pixel
+  intensities, never spatial layout, so angles/phases stay valid.
+- **Conditional band re-detection** (`pose_extractor.detect_all`) — the second
+  MediaPipe pass on the central crop runs only when the full-frame pass failed
+  to find a clean full-body batsman, halving pose cost without changing
+  tracking output.
+- **SelectKBest inside the pipeline** (`train_models.py`) — feature selection
+  is fit on the training fold only, so the held-out LOOCV sample never leaks
+  into selection.
+- **LOOCV, not a train/test split** (`train_models.py`) — with 9 videos a
+  stratified split would leave almost no test data; LOOCV is the honest
+  evaluation at this size.
+- **No data augmentation, no fabricated labels** — augmentation could not be
+  validated under LOOCV (augmented copies leak across folds) and would
+  falsify the landmarks biomechanics math depends on.
+- **Torso-normalised, per-second features** (`biomechanics_analyzer.py`) —
+  distances are divided by torso length and velocities use wall-clock seconds
+  so different body proportions and frame rates produce comparable features.
+
+## Scientific validity
+
+Single-camera pose estimation is not clinical measurement. Every output folder
+contains `measurement_provenance.txt` classifying each value as MEASURED /
+ESTIMATED_2D / ESTIMATED_3D / MODEL_PREDICTION / CONFIDENCE, and ML reports
+carry a disclaimer that labels are predictions on a tiny dataset, not ground
+truth. See `reports/scientific_validity.txt`. Do not use results for clinical
+or professional biomechanical decisions.
 
 ### Exploratory / analysis scripts
 
@@ -148,7 +251,9 @@ For each processed video, `output_data/<video_name>/` contains:
 - `shot_rating.csv` — per-shot 0-10 rating, factor breakdown, confidence, and commentary
 - `joint_angles_chart.png`, `phase_chart.png`, `movement_chart.png` — result charts
 
-Annotated analysis videos are written to `input_videos/Misc/` and ML/reporting artifacts to `reports/`.
+Annotated analysis videos are written to `output_videos/` (never inside
+`input_videos/`, which keeps freshly generated clips from being re-processed),
+and ML/reporting artifacts to `reports/`.
 
 ## License
 

@@ -37,6 +37,9 @@ from typing import List, Optional
 
 import cv2
 import mediapipe as mp
+import numpy as np
+
+import video_preprocess
 
 # ---------------------------------------------------------------------------
 # MediaPipe configuration (deliberately accessible / tunable)
@@ -299,7 +302,14 @@ class PoseExtractor:
         return kept
 
     def detect_all(self, video_path, fps=25.0):
-        """Pass 1: run detection on every frame using two merged streams."""
+        """Pass 1: run detection on every frame using two merged streams.
+
+        The central-band re-detection (a second, heavier MediaPipe pass) only
+        runs when the full-frame pass failed to produce a *clean full-body*
+        batsman candidate. When the full pass already locked the batsman with
+        good landmark visibility the band crop cannot add a better pose, so
+        skipping it halves the dominant CPU cost without changing output.
+        """
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             raise RuntimeError(f"Could not open video: {video_path}")
@@ -311,8 +321,13 @@ class PoseExtractor:
             if not ok:
                 break
             timestamp_ms = int((frame_index / max(fps, 1.0)) * 1000)
+            if video_preprocess.should_enhance():
+                frame = video_preprocess.enhance_frame(frame)
             full_cands = self._detect_full(frame, timestamp_ms)
-            band_cands = self._detect_band(frame, timestamp_ms)
+            if not self._is_clean_fullbody(full_cands):
+                band_cands = self._detect_band(frame, timestamp_ms)
+            else:
+                band_cands = []
             candidates = self._merge_candidates(full_cands, band_cands)
             for cand in candidates:
                 cand.frame = frame_index
@@ -320,6 +335,32 @@ class PoseExtractor:
             frame_index += 1
         cap.release()
         return per_frame
+
+    @staticmethod
+    def _is_clean_fullbody(candidates):
+        """True if a candidate is a confidently-tracked full-body batsman.
+
+        The band re-detection exists to rescue the batsman in the central
+        crop when he is too small or too crouched for the full-frame pass.
+        If the full pass already produced a candidate that:
+          * spans enough of the frame height (a real full body, not a blob),
+            and
+          * has at least half its landmarks confidently visible,
+        then a second pass over the same central region is redundant. The
+        threshold is deliberately conservative so genuinely weak frames still
+        trigger the rescue pass.
+        """
+        for cand in candidates:
+            if cand.bbox is None or cand.pose is None:
+                continue
+            _, bh = bbox_size(cand.bbox)
+            if bh < FULL_BODY_HEIGHT:
+                continue
+            vis = [lm.visibility for lm in cand.pose]
+            vis = [v for v in vis if np.isfinite(v)]
+            if len(vis) >= 15 and np.mean(vis) >= 0.45:
+                return True
+        return False
 
     # ------------------------------------------------------------------
     # Trajectory building

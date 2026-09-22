@@ -53,6 +53,7 @@ def main():
         c for c in df.columns
         if c not in META_COLUMNS
         and c not in {"shot_type"}
+        and not c.startswith("quality_")
     ]
 
     X_raw = df[feature_columns]

@@ -16,30 +16,154 @@ BASE_DIR = Path(__file__).resolve().parent
 TRACKING_SMOOTHING_ALPHA = 0.3
 
 
-def smooth_poses(frames_data, alpha=TRACKING_SMOOTHING_ALPHA):
-    """Very light EMA temporal smoothing of the locked batsman landmarks.
+def interpolate_landmark_gaps(frames_data, max_gap=3):
+    """Linear interpolation of short landmark gaps (temporal continuity).
 
-    Applied per-coordinate only for consecutive tracked frames (reset at
-    any gap), with a small alpha so the fast downswing/impact motion is not
-    reduced. This only stabilises landmark jitter; it never touches the
-    tracking_ok / confidence flags, and poses on TRACKING UNCERTAIN frames
-    are left empty.
+    For every landmark coordinate, consecutive frames whose value is missing
+    (or whose whole pose is missing) for a run of at most ``max_gap`` frames,
+    bounded by valid frames on both sides, are filled by linear interpolation
+    between the nearest valid values. This is a *continuity estimate*, never a
+    fresh detection:
+
+    * short occlusion / detection drops (<= ``max_gap`` frames) no longer tear
+      the skeleton apart,
+    * frame/person identity is NOT changed (raw detection is untouched),
+    * each affected frame is flagged ``interpolated=True`` so downstream
+      consumers can discount estimated coordinates,
+    * ``tracking_ok``/``confidence`` stay exactly as the tracker reported them.
+
+    Returns ``frames_data`` (mutated in place).
     """
-    prev = None
-    for item in frames_data:
+    def _coord(frame_idx, lm_idx, attr):
+        item = frames_data[frame_idx]
+        if item.get("pose") is None:
+            return None
         pose = item["pose"]
-        if pose is None or not item["tracking_ok"]:
+        if lm_idx >= len(pose):
+            return None
+        v = getattr(pose[lm_idx], attr, None)
+        try:
+            return float(v) if math.isfinite(float(v)) else None
+        except (TypeError, ValueError):
+            return None
+
+    def _set_coord(frame_idx, lm_idx, attr, value):
+        frame_pose = frames_data[frame_idx].get("pose")
+        if frame_pose is None:
+            return False
+        if lm_idx >= len(frame_pose):
+            return False
+        setattr(frame_pose[lm_idx], attr, value)
+        frames_data[frame_idx]["interpolated"] = True
+        return True
+
+    n_frames = len(frames_data)
+    n_landmarks = len(frames_data[0].get("pose") or []) if n_frames else 0
+
+    for lm_idx in range(n_landmarks):
+        for attr in ("x", "y", "z"):
+            values = [(_coord(i, lm_idx, attr)) for i in range(n_frames)]
+
+            i = 0
+            while i < n_frames:
+                if values[i] is not None:
+                    i += 1
+                    continue
+                start = i
+                while i < n_frames and values[i] is None:
+                    i += 1
+                end = i  # first valid index after the run (or == n_frames)
+                run_len = end - start
+                if run_len == 0 or run_len > max_gap:
+                    continue
+                if start == 0 or end >= n_frames:
+                    continue  # needs valid bounds on both sides
+                v0 = values[start - 1]
+                v1 = values[end]
+                if v0 is None or v1 is None:
+                    continue
+                for k, idx in enumerate(range(start, end), start=1):
+                    frac = k / (run_len + 1.0)
+                    _set_coord(idx, lm_idx, attr, v0 + (v1 - v0) * frac)
+    return frames_data
+
+
+def smooth_poses(frames_data, alpha=TRACKING_SMOOTHING_ALPHA):
+    """Two-pass (forward+backward) EMA smoothing of the locked batsman poses.
+
+    A single forward EMA lags behind fast movements (it only sees the past) and
+    is sensitive to the direction of motion. Averaging the forward and backward
+    EMA results cancels the phase lag and gives a symmetric, zero-phase
+    smoothing that stabilises landmark jitter while preserving the fast
+    downswing/impact dynamics.
+
+    The alpha is kept small so real swing movement is not eroded. This only
+    stabilises landmark coordinates; it never touches ``tracking_ok``,
+    ``confidence`` or ``interpolated`` flags.
+    """
+    def _series(frames_data, lm_idx, attr):
+        out = [None] * len(frames_data)
+        for i, item in enumerate(frames_data):
+            pose = item.get("pose")
+            if pose is None or lm_idx >= len(pose):
+                continue
+            v = getattr(pose[lm_idx], attr, None)
+            try:
+                out[i] = float(v) if math.isfinite(float(v)) else None
+            except (TypeError, ValueError):
+                out[i] = None
+        return out
+
+    def _write(values, frames_data, lm_idx, attr):
+        for i, v in enumerate(values):
+            if v is None:
+                continue
+            pose = frames_data[i].get("pose")
+            if pose is not None and lm_idx < len(pose):
+                setattr(pose[lm_idx], attr, v)
+
+    n_frames = len(frames_data)
+    n_landmarks = len(frames_data[0].get("pose") or []) if n_frames else 0
+
+    for lm_idx in range(n_landmarks):
+        for attr in ("x", "y", "z"):
+            series = _series(frames_data, lm_idx, attr)
+            # Forward EMA over consecutive valid values.
+            fwd = [None] * n_frames
             prev = None
-            continue
-        if prev is None:
-            prev = [LM_COPY(lm) for lm in pose]
-            continue
-        for cur, old in zip(pose, prev):
-            if math.isfinite(cur.x) and math.isfinite(old.x):
-                cur.x = old.x + alpha * (cur.x - old.x)
-                cur.y = old.y + alpha * (cur.y - old.y)
-                cur.z = old.z + alpha * (cur.z - old.z)
-        prev = [LM_COPY(lm) for lm in pose]
+            for i in range(n_frames):
+                v = series[i]
+                if v is None:
+                    prev = None
+                    continue
+                if prev is None:
+                    prev = v
+                else:
+                    prev = prev + alpha * (v - prev)
+                fwd[i] = prev
+            # Backward EMA.
+            bwd = [None] * n_frames
+            prev = None
+            for i in range(n_frames - 1, -1, -1):
+                v = series[i]
+                if v is None:
+                    prev = None
+                    continue
+                if prev is None:
+                    prev = v
+                else:
+                    prev = prev + alpha * (v - prev)
+                bwd[i] = prev
+            # Blend (inputs differ only where both are defined).
+            blended = [None] * n_frames
+            for i in range(n_frames):
+                if fwd[i] is not None and bwd[i] is not None:
+                    blended[i] = (fwd[i] + bwd[i]) / 2.0
+                elif fwd[i] is not None:
+                    blended[i] = fwd[i]
+                elif bwd[i] is not None:
+                    blended[i] = bwd[i]
+            _write(blended, frames_data, lm_idx, attr)
     return frames_data
 
 
@@ -175,9 +299,13 @@ def main():
               "will be TRACKING UNCERTAIN.")
 
     # -----------------------------------------
-    # Light temporal smoothing of the locked poses
+    # Short-gap interpolation + light temporal smoothing of the locked poses
     # -----------------------------------------
 
+    for item in frames_data:
+        item.setdefault("interpolated", False)
+
+    interpolate_landmark_gaps(frames_data, max_gap=5)
     smooth_poses(frames_data)
 
     # -----------------------------------------
@@ -200,7 +328,8 @@ def main():
             timestamp_ms,
             item["pose"],
             tracking_ok=item["tracking_ok"],
-            tracking_confidence=item["confidence"]
+            tracking_confidence=item["confidence"],
+            interpolated=item.get("interpolated", False)
         )
 
         rows.append(row)
@@ -268,6 +397,7 @@ def main():
     tracked = sum(1 for it in frames_data if it["tracking_ok"])
     uncertain = total_frames - tracked
     switches = sum(1 for it in frames_data if it["identity_switch_detected"])
+    interpolated = sum(1 for it in frames_data if it.get("interpolated"))
 
     mean_conf = (
         sum(it["confidence"] for it in frames_data) / total_frames
@@ -287,6 +417,7 @@ def main():
     print(f"Batsman tracked (tracking_ok): {tracked} ({tracked / max(total_frames, 1) * 100:.1f}%)")
     print(f"TRACKING UNCERTAIN frames: {uncertain} ({uncertain / max(total_frames, 1) * 100:.1f}%)")
     print(f"Identity-switch/defended-lock frames: {switches}")
+    print(f"Interpolated (short-gap estimate) frames: {interpolated}")
     print(f"Mean tracking confidence: {mean_conf:.3f}")
     print()
 

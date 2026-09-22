@@ -130,6 +130,56 @@ def engineer(df):
         helpers[f"{joint}_mean_at_impact"] = (df[l] + df[r]) / 2.0
 
     # ------------------------------------------------------------------
+    # 6b. Temporal intensity features (derived from the swing velocity /
+    #     acceleration signals added by biomechanics_analyzer).
+    # ------------------------------------------------------------------
+    def _col(name):
+        return name if name in df.columns else None
+
+    lel = _col("left_elbow_swing_max_abs_vel_dps")
+    rel = _col("right_elbow_swing_max_abs_vel_dps")
+    if lel and rel:
+        helpers["elbow_vel_symmetry_diff"] = (df[lel] - df[rel]).abs()
+        helpers["elbow_vel_bilateral_mean"] = (df[lel] + df[rel]) / 2.0
+    if lel and _col("left_shoulder_swing_max_abs_vel_dps"):
+        helpers["left_arm_vel_elbow_to_shoulder"] = _safe_div(
+            df[lel], df["left_shoulder_swing_max_abs_vel_dps"])
+    if rel and _col("right_shoulder_swing_max_abs_vel_dps"):
+        helpers["right_arm_vel_elbow_to_shoulder"] = _safe_div(
+            df[rel], df["right_shoulder_swing_max_abs_vel_dps"])
+
+    if _col("bat_speed_torso_per_s"):
+        helpers["bat_speed_explosiveness"] = df["bat_speed_torso_per_s"]
+        if _col("bat_speed_mean_torso_per_s"):
+            helpers["bat_speed_peak_to_mean_ratio"] = _safe_div(
+                df["bat_speed_torso_per_s"], df["bat_speed_mean_torso_per_s"])
+
+    if _col("lead_elbow_swing_max_abs_vel_dps"):
+        helpers["lead_arm_swing_vel"] = df["lead_elbow_swing_max_abs_vel_dps"]
+        if _col("bat_speed_torso_per_s"):
+            helpers["bat_speed_to_lead_elbow_vel"] = _safe_div(
+                df["bat_speed_torso_per_s"], df["lead_elbow_swing_max_abs_vel_dps"])
+
+    # Impact posture relative to the swing range: is the impact posture a
+    # distinct, deliberate one or does it sit inside the swing's normal range?
+    if _col("lead_wrist_height_at_impact") and _col("lead_wrist_height_range_swing"):
+        helpers["lead_wrist_impact_relative"] = _safe_div(
+            df["lead_wrist_height_at_impact"], df["lead_wrist_height_range_swing"])
+    if _col("torso_rotation_at_impact") and _col("torso_rotation_range_swing"):
+        helpers["torso_rotation_impact_relative"] = _safe_div(
+            df["torso_rotation_at_impact"], df["torso_rotation_range_swing"])
+    if _col("stride_length_torso") and _col("ankle_separation_median_swing"):
+        helpers["stride_to_stance_width_ratio"] = _safe_div(
+            df["stride_length_torso"], df["ankle_separation_median_swing"])
+    if _col("stride_length_torso") and _col("backfoot_stability_torso"):
+        helpers["stride_forward_to_backfoot_ratio"] = _safe_div(
+            df["stride_length_torso"] + 1e-9,
+            df["backfoot_stability_torso"] + 1e-9)
+    if _col("head_vertical_range_swing") and _col("torso_rotation_at_impact"):
+        helpers["head_crouch_to_trunk_rotation"] = _safe_div(
+            df["head_vertical_range_swing"], df["torso_rotation_at_impact"])
+
+    # ------------------------------------------------------------------
     # 7. Convert every helper into a clean numeric Series.
     # ------------------------------------------------------------------
     engineered_cols = {}

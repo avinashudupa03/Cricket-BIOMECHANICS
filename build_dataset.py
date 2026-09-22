@@ -106,6 +106,28 @@ def main():
 
         df = pd.read_csv(file)
 
+        # Poor-quality guard: clips where the pose tracker never locked on the
+        # batsman (0% coverage) or that are far too short to contain a shot
+        # produce only NaN features and would poison the dataset with imputed
+        # noise. Skip them explicitly as POOR QUALITY instead.
+        coverage = None
+        n_frames = None
+        if "quality_tracking_coverage" in df.columns:
+            _c = df["quality_tracking_coverage"].fillna(0)
+            coverage = float(_c.iloc[0]) if len(_c) else None
+        if "quality_frame_count" in df.columns:
+            _f = df["quality_frame_count"].fillna(0)
+            n_frames = int(_f.iloc[0]) if len(_f) else None
+
+        if coverage is not None and coverage <= 0:
+            print(f"[SKIP] '{video_name}' has 0% pose-tracking coverage "
+                  f"(poor quality) - excluded from the dataset.")
+            continue
+        if n_frames is not None and n_frames < 10:
+            print(f"[SKIP] '{video_name}' only has {n_frames} frame(s) - "
+                  f"too short to contain a shot - excluded.")
+            continue
+
         df.insert(0, "video_name", video_name)
         df.insert(1, "shot_type", shot_type)
 
