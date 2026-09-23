@@ -18,7 +18,9 @@ from flask import (
     url_for,
     flash,
     send_from_directory,
+    send_file,
     abort,
+    jsonify,
 )
 
 import shot_rating
@@ -35,6 +37,9 @@ OUTPUT_DATA = BASE_DIR / "output_data"
 ANALYSIS_VIDEOS = config.ANALYSIS_VIDEOS
 OUTPUT_VIDEOS = ANALYSIS_VIDEOS  # legacy alias used below
 REPORTS_DIR = BASE_DIR / "reports"
+# Built Kinetic.AI React dashboard (web-main/web-main/dist). When present it is
+# served as the app frontend; the old Jinja templates remain as a fallback.
+WEB_DIST = BASE_DIR / "web-main" / "web-main" / "dist"
 
 ALLOWED_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
 SHOT_TYPES = ["cut", "defence", "drive", "flick"]
@@ -1113,12 +1118,6 @@ def inject_globals():
     }
 
 
-@app.route("/")
-def index():
-    stats = load_dataset_stats()
-    return render_template("index.html", stats=stats)
-
-
 @app.route("/dashboard")
 def dashboard():
     stats = load_dataset_stats()
@@ -1176,30 +1175,26 @@ def upload_form():
     return render_template("upload.html")
 
 
-@app.route("/upload", methods=["POST"])
-def upload_submit():
+def _handle_upload_request(file, shot_type):
+    """Stage, dedup and schedule an uploaded video for processing.
 
-    shot_type = request.form.get("shot_type", "").strip().lower()
+    Shared by the HTML form and the JSON API so both routes behave exactly
+    alike. Returns a dict describing the outcome; callers translate it into
+    either a redirect+flash (HTML) or a JSON response.
+    """
+    shot_type = (shot_type or "").strip().lower()
     if shot_type not in SHOT_TYPES:
-        flash("Please select a valid shot type.", "error")
-        return redirect(url_for("upload_form"))
+        return {"kind": "invalid_shot", "message": "Please select a valid shot type."}
 
-    if "video" not in request.files:
-        flash("No video file was provided.", "error")
-        return redirect(url_for("upload_form"))
-
-    file = request.files["video"]
-    if file.filename == "":
-        flash("No file selected.", "error")
-        return redirect(url_for("upload_form"))
+    if file is None or file.filename in (None, ""):
+        return {"kind": "no_file", "message": "No file selected."}
 
     if not allowed_file(file.filename):
-        flash(
-            "Unsupported file type. Allowed: "
-            + ", ".join(sorted(ALLOWED_EXTENSIONS)),
-            "error",
-        )
-        return redirect(url_for("upload_form"))
+        return {
+            "kind": "bad_ext",
+            "message": "Unsupported file type. Allowed: "
+                       + ", ".join(sorted(ALLOWED_EXTENSIONS)),
+        }
 
     stem = safe_filename(Path(file.filename).stem)
     ext = Path(file.filename).suffix.lower()
@@ -1213,10 +1208,9 @@ def upload_submit():
     try:
         file.save(tmp_path)
     except Exception as exc:
-        print(f"[upload_submit] staging save failed: {exc}")
+        print(f"[upload] staging save failed: {exc}")
         tmp_path.unlink(missing_ok=True)
-        flash("Could not save the uploaded file.", "error")
-        return redirect(url_for("upload_form"))
+        return {"kind": "save_error", "message": "Could not save the uploaded file."}
 
     digest = video_content_hash(tmp_path)
 
@@ -1224,22 +1218,25 @@ def upload_submit():
     with UPLOAD_LOCK:
         if digest in INFLIGHT_UPLOADS:
             tmp_path.unlink(missing_ok=True)
-            flash("This clip was already submitted and is being processed.",
-                  "info")
-            return redirect(url_for("dashboard"))
+            return {
+                "kind": "inflight",
+                "message": "This clip was already submitted and is being processed.",
+            }
 
         existing_source = find_existing_video(tmp_path, digest)
         if existing_source is not None:
             tmp_path.unlink(missing_ok=True)
             existing_name = existing_source.stem
             if (OUTPUT_DATA / existing_name).exists():
-                flash(
-                    "This video was already analysed. Showing the existing result.",
-                    "info",
-                )
-                return redirect(url_for("results", video_name=existing_name))
-            flash("This video is already being processed.", "info")
-            return redirect(url_for("dashboard"))
+                return {
+                    "kind": "existing_results",
+                    "video_name": existing_name,
+                    "message": "This video was already analysed.",
+                }
+            return {
+                "kind": "existing_processing",
+                "message": "This video is already being processed.",
+            }
 
         target_folder = INPUT_VIDEOS / shot_type
         target = make_unique_path(target_folder, stem, ext)
@@ -1247,10 +1244,9 @@ def upload_submit():
             import shutil
             shutil.move(str(tmp_path), str(target))
         except Exception as exc:
-            print(f"[upload_submit] move failed: {exc}")
+            print(f"[upload] move failed: {exc}")
             tmp_path.unlink(missing_ok=True)
-            flash("Could not save the uploaded file.", "error")
-            return redirect(url_for("upload_form"))
+            return {"kind": "move_error", "message": "Could not save the uploaded file."}
 
         INFLIGHT_UPLOADS.add(digest)
 
@@ -1277,7 +1273,50 @@ def upload_submit():
     thread = threading.Thread(target=_pipeline_worker, args=(job_id,), daemon=True)
     thread.start()
 
-    return redirect(url_for("progress", job_id=job_id, shot_type=shot_type))
+    return {
+        "kind": "queued",
+        "job_id": job_id,
+        "video_name": video_name,
+        "shot_type": shot_type,
+    }
+
+
+@app.route("/upload", methods=["POST"])
+def upload_submit():
+
+    shot_type = request.form.get("shot_type", "").strip().lower()
+    outcome = _handle_upload_request(request.files.get("video"), shot_type)
+
+    if outcome["kind"] == "queued":
+        return redirect(url_for(
+            "progress", job_id=outcome["job_id"], shot_type=outcome["shot_type"]
+        ))
+
+    if outcome["kind"] == "inflight":
+        flash(outcome["message"], "info")
+        return redirect(url_for("dashboard"))
+
+    if outcome["kind"] == "existing_results":
+        flash(outcome["message"], "info")
+        return redirect(url_for("results", video_name=outcome["video_name"]))
+
+    if outcome["kind"] == "existing_processing":
+        flash(outcome["message"], "info")
+        return redirect(url_for("dashboard"))
+
+    if outcome["kind"] == "invalid_shot":
+        flash(outcome["message"], "error")
+
+    if outcome["kind"] == "no_file":
+        flash(outcome["message"], "error")
+
+    if outcome["kind"] == "bad_ext":
+        flash(outcome["message"], "error")
+
+    if outcome["kind"] in ("save_error", "move_error"):
+        flash(outcome["message"], "error")
+
+    return redirect(url_for("upload_form"))
 
 
 @app.route("/progress/<job_id>")
@@ -1343,6 +1382,277 @@ def results(video_name):
         ml_insights=load_ml_insights(),
         recent_videos=load_recent_videos(),
     )
+
+
+# --------------------------------------------------------------------------
+# JSON API (consumed by the Kinetic.AI React dashboard)
+# --------------------------------------------------------------------------
+def _num(value, default=None):
+    """Coerce numpy/Pandas scalars into plain JSON-safe numbers."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _json_safe(value):
+    """Best-effort conversion of a nested dict/list to JSON-serialisable data."""
+    import math
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        return value
+    if value is None:
+        return None
+    try:
+        return value.item() if hasattr(value, "item") else value
+    except Exception:
+        return str(value)
+
+
+@app.route("/api/stats")
+def api_stats():
+    stats = load_dataset_stats()
+    return jsonify({
+        "total_videos": stats["total_videos"],
+        "n_classes": stats["n_classes"],
+        "class_names": stats["class_names"],
+        "distribution": {str(k): int(v) for k, v in stats["distribution"].items()},
+        "n_features": stats["n_features"],
+        "dataset_exists": stats["dataset_exists"],
+        "has_ml_reports": stats.get("has_ml_reports", {}),
+        "ml": load_ml_insights(),
+    })
+
+
+@app.route("/api/videos")
+def api_videos():
+    videos = _list_processed_videos()
+    for v in videos:
+        v["analysis_url"] = url_for("output_video_file", video_name=v["name"]) \
+            if v.get("analysis_exists") else None
+        v["results_url"] = url_for("api_results", video_name=v["name"])
+    return jsonify({
+        "count": len(videos),
+        "videos": videos,
+    })
+
+
+@app.route("/api/history")
+def api_history():
+    videos = _list_processed_videos()
+    return jsonify({
+        "total": len(videos),
+        "rated_count": sum(1 for v in videos if v["rating"] is not None),
+        "videos": videos,
+    })
+
+
+@app.route("/api/ml")
+def api_ml():
+    return jsonify(_json_safe(load_ml_insights()))
+
+
+@app.route("/api/reports")
+def api_reports():
+    eda_images = []
+    eda_dir = REPORTS_DIR / "eda"
+    if eda_dir.exists():
+        for p in sorted(eda_dir.glob("*.png")):
+            eda_images.append({
+                "name": p.name,
+                "url": url_for("report_file", filename=f"eda/{p.name}"),
+            })
+
+    text_files = {
+        "classification_report.txt",
+        "model_results_summary.txt",
+        "data_quality.txt",
+        "error_analysis.txt",
+        "robustness.txt",
+        "scientific_validity.txt",
+        "feature_importance.csv",
+        "model_comparison.csv",
+    }
+    documents = {}
+    for name in sorted(text_files):
+        p = REPORTS_DIR / name
+        if p.exists():
+            text = p.read_text(encoding="utf-8", errors="replace")
+            documents[name] = text[:60000]
+
+    images = {}
+    for name in ("confusion_matrix.png", "feature_importance.png"):
+        p = REPORTS_DIR / name
+        images[name] = (
+            url_for("report_file", filename=name) if p.exists() else None
+        )
+
+    return jsonify({
+        "eda_images": eda_images,
+        "images": images,
+        "documents": documents,
+        "stats": load_dataset_stats(),
+    })
+
+
+def _results_payload(video_name):
+    """JSON payload for a single processed video (used by api_results)."""
+    shot_type = ""
+    for folder_candidate in INPUT_VIDEOS.rglob(f"{video_name}.*"):
+        if folder_candidate.is_file() and not is_generated_video(
+                folder_candidate.name):
+            shot_type = folder_candidate.parent.name.lower()
+            break
+    if shot_type == "":
+        for sub in SHOT_TYPES:
+            if (INPUT_VIDEOS / sub / video_name).exists():
+                shot_type = sub
+                break
+
+    data = load_video_results(video_name)
+    if not data["found"]:
+        return None
+
+    plot_name = make_angle_plot(video_name)
+    charts = make_results_charts(video_name)
+    phase_timeline = load_phase_timeline(video_name)
+    injury = load_injury_data(video_name)
+    analysis_video = OUTPUT_VIDEOS / f"{video_name}_analysis.mp4"
+    has_analysis = analysis_video.exists() and \
+        analysis_video_is_ready(analysis_video)
+
+    metric_round = {
+        "downswing_duration_ms", "followthrough_duration_ms",
+        "impact_frame", "impact_time_ms", "maximum_movement_score",
+        "average_movement_score",
+    }
+    metrics = {}
+    for k, v in data["metrics"].items():
+        num = _num(v)
+        if num is not None and k in metric_round:
+            num = round(num, 1)
+        metrics[k] = num
+
+    return {
+        "video_name": video_name,
+        "shot_type": shot_type or "unknown",
+        "shot_type_label": SHOT_TYPE_LABELS.get(shot_type, shot_type or "Unknown"),
+        "found": True,
+        "frames": data["frames"],
+        "metrics": metrics,
+        "features": {k: _num(v) for k, v in data["features"].items()},
+        "impact_angles": {
+            k: round(_num(v), 1) if _num(v) is not None else None
+            for k, v in data["impact_angles"].items()
+        },
+        "impact_angle_labels": IMPACT_ANGLE_LABELS,
+        "impact_angle_columns": IMPACT_ANGLE_COLUMNS,
+        "rating": _json_safe(data["rating"]),
+        "injury": _json_safe(injury),
+        "phase_timeline": _json_safe(phase_timeline),
+        "charts": charts,
+        "plot": plot_name,
+        "has_analysis": has_analysis,
+        "analysis_url": url_for(
+            "output_video_file", video_name=video_name) if has_analysis else None,
+        "output_base": url_for(
+            "result_image", video_name=video_name, filename="") ,
+        "ml": load_ml_insights(),
+    }
+
+
+@app.route("/api/results/<video_name>")
+def api_results(video_name):
+    video_name = Path(video_name).name
+    payload = _results_payload(video_name)
+    if payload is None:
+        return jsonify({"found": False, "video_name": video_name}), 404
+    return jsonify(payload)
+
+
+@app.route("/api/progress/<job_id>")
+def api_progress(job_id):
+    job = PIPELINE_JOBS.get(job_id)
+    if job is None:
+        return jsonify({"state": "missing"})
+    return jsonify({
+        "state": "done" if job.get("done") else "running",
+        "ok": job.get("ok"),
+        "steps": job.get("steps", []),
+        "current": job.get("current", "Starting…"),
+        "error": job.get("error"),
+        "video_name": job.get("video_name"),
+        "shot_type": job.get("shot_type", ""),
+    })
+
+
+@app.route("/api/upload", methods=["POST"])
+def api_upload():
+    shot_type = request.form.get("shot_type", "").strip().lower()
+    outcome = _handle_upload_request(request.files.get("video"), shot_type)
+    if outcome["kind"] == "queued":
+        return jsonify({
+            "status": "queued",
+            "job_id": outcome["job_id"],
+            "video_name": outcome["video_name"],
+            "shot_type": outcome["shot_type"],
+        })
+    if outcome["kind"] == "existing_results":
+        return jsonify({
+            "status": "existing",
+            "video_name": outcome["video_name"],
+            "message": outcome["message"],
+        })
+    if outcome["kind"] == "existing_processing":
+        return jsonify({"status": "duplicate", "message": outcome["message"]}), 409
+    if outcome["kind"] == "inflight":
+        return jsonify({"status": "inflight", "message": outcome["message"]}), 409
+    return jsonify({"status": "error", "message": outcome["message"]}), 400
+
+
+@app.route("/api/dataset.csv")
+def api_dataset_csv():
+    """Download the engineered biomechanics dataset as CSV."""
+    candidates = [
+        OUTPUT_DATA / "cricket_biomechanics_dataset_engineered.csv",
+        OUTPUT_DATA / "cricket_biomechanics_dataset_cleaned.csv",
+        OUTPUT_DATA / "cricket_biomechanics_dataset.csv",
+    ]
+    for path in candidates:
+        if path.exists():
+            return send_file(path, as_attachment=True,
+                             download_name=path.name)
+    abort(404)
+
+
+# --------------------------------------------------------------------------
+# SPA: serve the built Kinetic.AI React dashboard when dist is present.
+# --------------------------------------------------------------------------
+@app.route("/")
+def index():
+    index_file = WEB_DIST / "index.html"
+    if index_file.exists():
+        return send_from_directory(WEB_DIST, "index.html")
+    stats = load_dataset_stats()
+    return render_template("index.html", stats=stats)
+
+
+@app.route("/<path:path>")
+def spa_fallback(path):
+    """Serve built frontend assets, falling back to the SPA shell."""
+    if (WEB_DIST / "index.html").exists():
+        target = WEB_DIST / path
+        if target.is_file():
+            return send_from_directory(WEB_DIST, path)
+        return send_from_directory(WEB_DIST, "index.html")
+    abort(404)
 
 
 if __name__ == "__main__":
