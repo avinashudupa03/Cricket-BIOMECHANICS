@@ -1,0 +1,6 @@
+{
+  "name": "Kinetic.AI Biomechanics Core",
+  "description": "Optical 3D high-speed motion capture and AI biomechanics analytics platform for elite athletic swing tracking, segmental torque analysis, and kinetic leak diagnosis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

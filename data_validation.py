@@ -3,7 +3,7 @@ import pandas as pd
 from pathlib import Path
 
 
-SHOT_TYPES = {"cut", "defence", "drive", "flick"}
+SHOT_TYPES = {"cut", "defence", "drive", "flick", "pull shot", "unknown"}
 
 # Non-numeric (metadata/label) columns that are intentionally kept as strings.
 NON_NUMERIC_COLUMNS = {"video_name", "shot_type"}

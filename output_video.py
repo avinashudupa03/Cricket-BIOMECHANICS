@@ -28,6 +28,7 @@ The skeleton is drawn ONLY on frames where the identity lock is held
 state instead of re-attaching to the keeper, bowler or non-striker.
 """
 
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -236,7 +237,13 @@ def draw_overlay(frame, info):
     col_x = w - 18
     for name, key in labels:
         val = ang.get(key)
-        text = f"{name} {int(round(val)) if val is not None else '--'}"
+        # A missing joint angle is None OR a NaN that survived the CSV round
+        # trip (e.g. when the pose never locked on that joint). int(round(nan))
+        # raises ValueError, so treat non-finite the same as absent and render
+        # the "--" placeholder instead of aborting the whole render.
+        shown = (str(int(round(val)))
+                 if val is not None and math.isfinite(val) else "--")
+        text = f"{name} {shown}"
         (tww, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
         x = col_x - tww
         cv2.putText(frame, text, (x, top), cv2.FONT_HERSHEY_SIMPLEX, 0.45,

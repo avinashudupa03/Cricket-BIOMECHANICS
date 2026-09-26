@@ -303,8 +303,12 @@ def append_deep_dive(lines, best, loo, y_true, y_pred):
         lines.append(f"  {'region':<12}{'avg(match)':>12}{'avg(mismatch)':>15}"
                      f"{'delta':>9}   n_match/n_mis")
         for r in regions:
-            m = [v[r] for _, ok, v in reg_rows if ok]
-            x = [v[r] for _, ok, v in reg_rows if not ok]
+            # Not every clip exposes the same landmark regions (short videos
+            # can drop e.g. ankle/foot), so a region present in one video may
+            # be absent in another. Skip the missing entries instead of
+            # raising KeyError.
+            m = [v[r] for _, ok, v in reg_rows if ok and r in v]
+            x = [v[r] for _, ok, v in reg_rows if not ok and r in v]
             if not m or not x:
                 continue
             am, ax = sum(m) / len(m), sum(x) / len(x)

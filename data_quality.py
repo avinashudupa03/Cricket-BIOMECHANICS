@@ -122,7 +122,10 @@ def check_duplicate_frames(vid, name, problems, quick=False):
     if "timestamp_ms" not in df.columns:
         return
     ts = df["timestamp_ms"].to_numpy(float)
-    if np.diff(ts).min() < 0:
+    # A clip can legitimately contain a single tracked frame (very short
+    # videos), which makes np.diff() empty. There is no ordering to regress
+    # in that case, so only check when at least two frames exist.
+    if len(ts) >= 2 and np.diff(ts).min() < 0:
         problems.append(f"TIME-REGRESS: {name} timestamps go backwards "
                         f"({int(np.argmin(np.diff(ts)))})")
 
