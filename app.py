@@ -1272,9 +1272,35 @@ def _handle_upload_request(file, shot_type):
                     "video_name": existing_name,
                     "message": "This video was already analysed.",
                 }
+            # The identical file already exists in input_videos but has no
+            # output yet (previous upload was interrupted/failed). Instead of
+            # rejecting the re-upload, queue the pipeline for the existing file
+            # so the user can recover without manual intervention.
+            INFLIGHT_UPLOADS.add(digest)
+            _prune_old_jobs()
+            job_id = uuid.uuid4().hex[:12]
+            job = {
+                "video_path": str(existing_source),
+                "video_name": existing_name,
+                "shot_type": shot_type,
+                "digest": digest,
+                "steps": [],
+                "current": "Queued…",
+                "done": False,
+                "ok": False,
+                "error": None,
+                "started_at": None,
+                "finished_at": None,
+            }
+            with PIPELINE_JOBS_LOCK:
+                PIPELINE_JOBS[job_id] = job
+            thread = threading.Thread(target=_pipeline_worker, args=(job_id,), daemon=True)
+            thread.start()
             return {
-                "kind": "existing_processing",
-                "message": "This video is already being processed.",
+                "kind": "queued",
+                "job_id": job_id,
+                "video_name": existing_name,
+                "shot_type": shot_type,
             }
 
         target_folder = INPUT_VIDEOS / shot_type
