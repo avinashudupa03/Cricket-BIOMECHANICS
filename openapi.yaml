@@ -1,0 +1,489 @@
+openapi: 3.0.3
+info:
+  title: Cricket Biomechanics AI API
+  description: |
+    Automated biomechanical analysis of cricket batting swings using human
+    pose estimation and machine learning.
+
+    ## Features
+
+    - **Pose estimation** from video frames via MediaPipe
+    - **Joint angle tracking** for elbows, knees, shoulders, and hips
+    - **Batting phase detection** — Stance, Backlift, Downswing, Impact, Follow-through
+    - **Biomechanics metrics** — impact frame/time, durations, movement scores
+    - **Shot rating (0–10)** — deterministic weighted rating
+    - **Shot classification (ML)** — with confidence gating
+    - **Injury risk screening**
+
+    ## Authentication
+
+    All endpoints require session-based authentication. Log in via `/login`
+    with the admin password (set via `CBAI_ADMIN_PASSWORD` env var).
+
+    ## Scientific Validity
+
+    Single-camera pose estimation is not clinical measurement. Every output
+    is labeled with provenance (MEASURED / ESTIMATED_2D / ESTIMATED_3D /
+    MODEL_PREDICTION / CONFIDENCE). Do not use results for clinical or
+    professional biomechanical decisions.
+  version: 1.0.0
+  license:
+    name: Educational/Research Use
+
+servers:
+  - url: http://127.0.0.1:5000
+    description: Local development server
+
+tags:
+  - name: System
+    description: System status and dataset info
+  - name: Videos
+    description: Video upload and processing
+  - name: Results
+    description: Analysis results and biomechanics data
+  - name: ML
+    description: Machine learning model insights
+  - name: Reports
+    description: Generated reports and artifacts
+
+paths:
+  /api/stats:
+    get:
+      tags: [System]
+      summary: Dataset statistics
+      description: Returns dataset totals, class names, distribution, and ML summary.
+      responses:
+        '200':
+          description: Dataset statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_videos:
+                    type: integer
+                    example: 22
+                  n_classes:
+                    type: integer
+                    example: 5
+                  class_names:
+                    type: array
+                    items:
+                      type: string
+                    example: ["cut", "defence", "drive", "flick", "pull shot"]
+                  distribution:
+                    type: object
+                    additionalProperties:
+                      type: integer
+                    example: {"cut": 5, "defence": 4, "drive": 5, "flick": 4, "pull shot": 4}
+                  n_features:
+                    type: integer
+                    example: 89
+                  dataset_exists:
+                    type: boolean
+                    example: true
+
+  /api/videos:
+    get:
+      tags: [Videos]
+      summary: List processed videos
+      description: Returns processed clips (newest first) with rating and classification.
+      responses:
+        '200':
+          description: List of processed videos
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/VideoSummary'
+
+  /api/history:
+    get:
+      tags: [Videos]
+      summary: Analysis history
+      description: Same as /api/videos but includes total and rated_count.
+      responses:
+        '200':
+          description: History with counts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  videos:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/VideoSummary'
+                  total:
+                    type: integer
+                  rated_count:
+                    type: integer
+
+  /api/results/{video_name}:
+    get:
+      tags: [Results]
+      summary: Full analysis results
+      description: |
+        Returns the complete analysis payload for a processed video including
+        metrics, joint angles, phases, charts, rating, injury risk, and
+        ML classification.
+      parameters:
+        - name: video_name
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "defence"
+      responses:
+        '200':
+          description: Full analysis results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VideoResults'
+        '404':
+          description: Video not found
+
+  /api/ml:
+    get:
+      tags: [ML]
+      summary: ML evaluation summary
+      description: Returns LOOCV evaluation summary and model comparison table.
+      responses:
+        '200':
+          description: ML insights
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  available:
+                    type: boolean
+                  dataset_size:
+                    type: integer
+                  n_classes:
+                    type: integer
+                  best_model:
+                    type: string
+                    example: "LogisticRegression"
+                  evaluation:
+                    type: string
+                    example: "Leave-One-Out CV (LOOCV)"
+                  accuracy:
+                    type: string
+                    example: "40.9%"
+                  comparison_table:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ModelComparison'
+
+  /api/reports:
+    get:
+      tags: [Reports]
+      summary: Available reports
+      description: Returns EDA images, model artifacts, and validation documents.
+      responses:
+        '200':
+          description: Available reports
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  eda_images:
+                    type: array
+                    items:
+                      type: string
+                  model_artifacts:
+                    type: array
+                    items:
+                      type: string
+                  validation_documents:
+                    type: array
+                    items:
+                      type: string
+
+  /api/progress/{job_id}:
+    get:
+      tags: [Videos]
+      summary: Pipeline progress
+      description: Returns the current state of a background processing job.
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Job progress
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  state:
+                    type: string
+                    enum: [running, done, missing]
+                  ok:
+                    type: boolean
+                  steps:
+                    type: array
+                    items:
+                      type: string
+                  current:
+                    type: string
+                  error:
+                    type: string
+                    nullable: true
+                  video_name:
+                    type: string
+                  shot_type:
+                    type: string
+
+  /api/upload:
+    post:
+      tags: [Videos]
+      summary: Upload a video for analysis
+      description: |
+        Upload a cricket batting video for biomechanical analysis.
+        The video is deduplicated by SHA-256 content hash.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                video:
+                  type: string
+                  format: binary
+                  description: Video file (.mp4, .avi, .mov, .mkv)
+                shot_type:
+                  type: string
+                  enum: [cut, defence, drive, flick, pull shot, unknown]
+                  description: Shot type classification
+              required: [video, shot_type]
+      responses:
+        '200':
+          description: Upload accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [queued, existing]
+                  job_id:
+                    type: string
+                  video_name:
+                    type: string
+        '400':
+          description: Invalid shot type or file
+        '413':
+          description: File too large (max 512 MB)
+
+  /api/dataset.csv:
+    get:
+      tags: [System]
+      summary: Download dataset
+      description: Returns the engineered dataset as a CSV file download.
+      responses:
+        '200':
+          description: CSV file download
+          content:
+            text/csv:
+              schema:
+                type: string
+
+components:
+  schemas:
+    VideoSummary:
+      type: object
+      properties:
+        name:
+          type: string
+          example: "defence"
+        shot_type:
+          type: string
+          example: "defence"
+        rating:
+          type: number
+          nullable: true
+          example: 7.2
+        frames:
+          type: integer
+          example: 150
+        processed_at:
+          type: string
+          example: "2024-01-15 14:30"
+        analysis_exists:
+          type: boolean
+          example: true
+        results_url:
+          type: string
+          example: "/results/defence?shot_type=defence"
+
+    VideoResults:
+      type: object
+      properties:
+        video_name:
+          type: string
+        frames:
+          type: integer
+        found:
+          type: boolean
+        impact_angles:
+          type: object
+          additionalProperties:
+            type: number
+        metrics:
+          type: object
+          additionalProperties:
+            type: number
+        features:
+          type: object
+          additionalProperties:
+            type: number
+        rating:
+          $ref: '#/components/schemas/ShotRating'
+        injury:
+          $ref: '#/components/schemas/InjuryData'
+        classification:
+          $ref: '#/components/schemas/Classification'
+        phase_timeline:
+          $ref: '#/components/schemas/PhaseTimeline'
+        charts:
+          type: object
+          additionalProperties:
+            type: string
+
+    ShotRating:
+      type: object
+      properties:
+        shot_type:
+          type: string
+        rating:
+          type: number
+          example: 7.2
+        classification:
+          type: string
+          example: "Good"
+        confidence:
+          type: number
+          example: 0.85
+        covered_weight:
+          type: number
+          example: 0.92
+        strengths:
+          type: array
+          items:
+            type: string
+        weaknesses:
+          type: array
+          items:
+            type: string
+        explanation:
+          type: string
+        factors:
+          type: array
+          items:
+            $ref: '#/components/schemas/FactorScore'
+
+    FactorScore:
+      type: object
+      properties:
+        code:
+          type: string
+          example: "swing"
+        label:
+          type: string
+          example: "Bat Swing & Bat Speed"
+        weight:
+          type: number
+          example: 0.09
+        score:
+          type: number
+          nullable: true
+          example: 7.5
+        weighted:
+          type: number
+          nullable: true
+          example: 0.68
+        comment:
+          type: string
+
+    InjuryData:
+      type: object
+      properties:
+        summary:
+          type: object
+          properties:
+            safety_score:
+              type: number
+            risk_level:
+              type: string
+            coverage:
+              type: number
+            n_flags:
+              type: integer
+        flags:
+          type: array
+          items:
+            type: object
+        available:
+          type: boolean
+
+    Classification:
+      type: object
+      properties:
+        model_name:
+          type: string
+        predicted:
+          type: string
+        confidence:
+          type: number
+        threshold:
+          type: number
+        shot_type:
+          type: string
+        reason:
+          type: string
+        reason_label:
+          type: string
+
+    PhaseTimeline:
+      type: object
+      properties:
+        segments:
+          type: array
+          items:
+            type: object
+            properties:
+              phase:
+                type: string
+              start:
+                type: integer
+              end:
+                type: integer
+        total_frames:
+          type: integer
+        impact_frame:
+          type: integer
+          nullable: true
+
+    ModelComparison:
+      type: object
+      properties:
+        model:
+          type: string
+        accuracy:
+          type: number
+        f1_macro:
+          type: number
+        precision_macro:
+          type: number
+        recall_macro:
+          type: number

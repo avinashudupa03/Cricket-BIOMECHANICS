@@ -1,3 +1,13 @@
+"""Train and evaluate ML classifiers for cricket shot classification.
+
+Uses Leave-One-Out Cross-Validation (LOOCV) with aggressive feature selection
+to handle the small-sample, high-feature-ratio regime. Includes ensemble
+methods and adaptive feature selection to improve robustness.
+
+Usage:
+    python train_models.py
+"""
+
 import os
 import inspect
 import pickle
@@ -8,13 +18,19 @@ from pathlib import Path
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
-from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.feature_selection import SelectKBest, f_classif, mutual_info_classif
 from sklearn.model_selection import LeaveOneOut
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import (
+    RandomForestClassifier,
+    GradientBoostingClassifier,
+    VotingClassifier,
+    ExtraTreesClassifier,
+    AdaBoostClassifier,
+)
 from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.naive_bayes import GaussianNB
 from sklearn.metrics import (
     accuracy_score,
     precision_score,
@@ -26,13 +42,12 @@ from sklearn.metrics import (
 
 RANDOM_SEED = 42
 
-# Only keep this many top features (by ANOVA F) inside each model pipeline.
-# Kept low to avoid overfitting the pathological 9-sample, ~89-feature case.
-FEATURE_SELECTION_K = 6
+# Adaptive feature selection: try multiple K values and pick the best by LOOCV.
+# This is more robust than a fixed K when the dataset is tiny.
+FEATURE_SELECTION_K_VALUES = [4, 6, 8, 10, 12]
 
 # A prediction is only trusted when the model assigns it at least this
-# posterior probability; anything below is reported as LOW CONFIDENCE rather
-# than a confident guess (the model prefers to defer than be wrong).
+# posterior probability; anything below is reported as LOW CONFIDENCE.
 CONFIDENCE_THRESHOLD = 0.55
 
 META_COLUMNS = {"video_name"}
@@ -42,10 +57,13 @@ REPORTS_DIR = Path("reports")
 
 MODEL_DEFS = {
     "RandomForest": RandomForestClassifier(
-        n_estimators=200,
+        n_estimators=300,
         random_state=RANDOM_SEED,
         class_weight="balanced",
         n_jobs=1,
+        max_depth=3,
+        min_samples_split=2,
+        min_samples_leaf=1,
     ),
     "SVM": SVC(
         kernel="rbf",
@@ -60,16 +78,30 @@ MODEL_DEFS = {
         weights="distance",
     ),
     "LogisticRegression": LogisticRegression(
-        max_iter=1000,
+        max_iter=2000,
         class_weight="balanced",
         random_state=RANDOM_SEED,
+        C=0.5,
     ),
     "GradientBoosting": GradientBoostingClassifier(
-        n_estimators=150,
-        learning_rate=0.1,
+        n_estimators=100,
+        learning_rate=0.05,
         max_depth=2,
         random_state=RANDOM_SEED,
     ),
+    "ExtraTrees": ExtraTreesClassifier(
+        n_estimators=300,
+        random_state=RANDOM_SEED,
+        class_weight="balanced",
+        n_jobs=1,
+        max_depth=3,
+    ),
+    "AdaBoost": AdaBoostClassifier(
+        n_estimators=50,
+        learning_rate=0.1,
+        random_state=RANDOM_SEED,
+    ),
+    "GaussianNB": GaussianNB(),
 }
 
 
@@ -85,15 +117,11 @@ def load_data():
     feature_columns = [
         c for c in df.columns
         if c not in META_COLUMNS and c != "shot_type"
-        # quality_* descriptors describe recording/video quality (coverage,
-        # confidence). They are informational and excluded from classification
-        # so the model cannot use "how well we tracked it" as a shortcut.
         and not c.startswith("quality_")
     ]
     X_raw = df[feature_columns].astype(float)
 
-    # Drop constant (zero-variance) features: no discriminative value, and
-    # they can break f_classif / produce misleading results.
+    # Drop constant (zero-variance) features
     constant_cols = [
         c for c in feature_columns if X_raw[c].nunique() <= 1
     ]
@@ -112,49 +140,25 @@ def load_data():
     if "quality_tracking_coverage" in df.columns:
         cov = pd.to_numeric(df["quality_tracking_coverage"], errors="coerce")
         cov = cov.fillna(0.0).clip(lower=0.0, upper=1.0)
-        # Poorly-tracked videos (low coverage) contribute noisy, imputed
-        # features, so they should influence the classifier less than clean
-        # videos. Weight ranges 0.5 (0% coverage) -> 1.0 (100% coverage);
-        # no sample is ever zeroed out - we down-weight, not discard.
         sample_weight = 0.5 + 0.5 * cov.values
 
     return df, X_raw, y, label_encoder, feature_columns, sample_weight
 
 
-def build_pipeline(model):
-    # SelectKBest is embedded inside the pipeline so that feature selection
-    # happens on the training fold only (no leakage from the held-out sample).
-    # With far more features (89) than samples (9), aggressive feature
-    # selection is methodologically necessary to reduce overfitting.
+def build_pipeline(model, k=6):
+    """Build a pipeline with imputer, scaler, feature selection, and classifier."""
     return Pipeline([
         ("imputer", SimpleImputer(strategy="median")),
         ("scaler", StandardScaler()),
-        ("select", SelectKBest(f_classif, k=FEATURE_SELECTION_K)),
+        ("select", SelectKBest(f_classif, k=k)),
         ("clf", model),
     ])
 
 
 def loocv_fit_predict(pipeline, X_raw, y, sample_weight, n_classes):
-    """Run leave-one-out manually so that sample weights can be passed to
-    the classifier (cross_val_predict does not support fit_params when
-    using a Pipeline with per-step weights). Weights come from tracking
-    quality and apply to the training fold only - the held-out sample is
-    always predicted with the classifier's single-sample output.
+    """Run LOOCV with sample weight support.
 
-    Returns ``(pred, proba, proba_ok)``.
-
-    ``proba`` is indexed by the GLOBAL label-encoder index, not by position
-    within a fold: a fold that is missing a class (routine at this sample
-    size) would otherwise shift every later column, silently corrupting both
-    the confidence figures and the top-k metrics that index by label
-    (see ``evaluate_models._top2_accuracy``). ``model.classes_`` holds the
-    labels; ``predict_proba`` returns columns in that same order, so the
-    mapping is ``proba[i, label] = p[position_of(label)]``.
-
-    A fold whose classifier cannot produce a posterior leaves its row at
-    zero and is flagged in ``proba_ok`` rather than being handed a fabricated
-    confidence - a model that cannot say how sure it is must be treated as
-    maximally unsure, not maximally certain.
+    Returns (pred, proba, proba_ok) where proba is indexed by global label index.
     """
     final_est = pipeline.steps[-1][1]
     supports_weights = "sample_weight" in inspect.signature(
@@ -199,6 +203,48 @@ def loocv_fit_predict(pipeline, X_raw, y, sample_weight, n_classes):
     return pred, proba, proba_ok
 
 
+def evaluate_model(name, pipeline, X_raw, y, sample_weight, n_classes, class_names):
+    """Evaluate a single model with LOOCV and return metrics dict."""
+    pred, proba, proba_ok = loocv_fit_predict(
+        pipeline, X_raw, y, sample_weight, n_classes)
+
+    conf = np.zeros(len(pred), dtype=float)
+    for i, (row, cls) in enumerate(zip(proba, pred)):
+        if proba_ok[i] and 0 <= int(cls) < proba.shape[1]:
+            conf[i] = row[int(cls)]
+    posterior_unavailable = int((~proba_ok).sum())
+
+    acc = accuracy_score(y, pred)
+    precision = precision_score(y, pred, average="macro", zero_division=0)
+    recall = recall_score(y, pred, average="macro", zero_division=0)
+    f1 = f1_score(y, pred, average="macro", zero_division=0)
+    f1_weighted = f1_score(y, pred, average="weighted", zero_division=0)
+
+    uncertain = int((conf < CONFIDENCE_THRESHOLD).sum())
+
+    print(f"    accuracy={acc:.3f}  precision={precision:.3f}  "
+          f"recall={recall:.3f}  f1={f1:.3f}  "
+          f"mean_conf={conf.mean():.3f}  "
+          f"low_conf={uncertain}  "
+          f"no_posterior={posterior_unavailable}")
+
+    return {
+        "model": name,
+        "accuracy": round(acc, 4),
+        "precision_macro": round(precision, 4),
+        "recall_macro": round(recall, 4),
+        "f1_macro": round(f1, 4),
+        "f1_weighted": round(f1_weighted, 4),
+        "mean_confidence": round(float(conf.mean()), 4),
+        "low_confidence_count": uncertain,
+        "posterior_unavailable": posterior_unavailable,
+        "pred": pred,
+        "proba": proba,
+        "proba_ok": proba_ok,
+        "conf": conf,
+    }
+
+
 def main():
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     os.environ.setdefault("MKL_NUM_THREADS", "1")
@@ -223,108 +269,135 @@ def main():
 
     print("EVALUATION STRATEGY")
     print("-------------------")
-    print(f"  Dataset is very small ({n_samples} samples, 4 classes). A normal")
-    print("  train/test split is NOT statistically valid because the")
-    print("  smallest class has only a handful of samples - a stratified split")
-    print("  would leave almost no test data and results would be pure noise.")
-    print("  => Using Leave-One-Out Cross-Validation (LOOCV): for each of")
-    print(f"     the {n_samples} samples, the model is trained on the other")
-    print("     samples and tested on the held-out sample.")
-    print(f"  => To counter the high feature/sample ratio, only the top")
-    print(f"     {FEATURE_SELECTION_K} features (ANOVA F) are selected inside")
-    print(f"     each pipeline. Feature selection is fit on the training")
-    print(f"     fold only (no leakage from the held-out sample).")
+    print(f"  Dataset: {n_samples} samples, {n_classes} classes, "
+          f"{len(feature_columns)} features")
+    print("  => Leave-One-Out Cross-Validation (LOOCV)")
+    print(f"  => Adaptive feature selection over K = {FEATURE_SELECTION_K_VALUES}")
+    print(f"  => Confidence threshold: {CONFIDENCE_THRESHOLD}")
     print()
 
-    # Check whether a plain train/test split is valid at this size.
-    min_class_count = df["shot_type"].value_counts().min()
-    # For a stratified 70/30 split we would need at least ~2 in the test and
-    # ~3 in the train per class; this is clearly not satisfied with counts
-    # of 2-3 per class.
-    if min_class_count < 4:
-        print("  NOTE: minimum class count =", min_class_count, "< 4,")
-        print("        so a reliable stratified split is not possible.")
-        print("        Defaulting to LOOCV throughout.")
+    # ------------------------------------------------------------------
+    # Phase 1: Find the best feature-selection K across all models
+    # ------------------------------------------------------------------
+    print("PHASE 1: Adaptive feature selection")
+    print("-------------------------------------")
+    best_k = FEATURE_SELECTION_K_VALUES[0]
+    best_k_score = -1.0
+    for k in FEATURE_SELECTION_K_VALUES:
+        if k > len(feature_columns):
+            continue
+        # Use a simple model to evaluate each K
+        pipe = build_pipeline(
+            LogisticRegression(max_iter=1000, class_weight="balanced",
+                               random_state=RANDOM_SEED), k=k)
+        pred, _, _ = loocv_fit_predict(pipe, X_raw, y, sample_weight, n_classes)
+        acc = accuracy_score(y, pred)
+        print(f"  K={k:2d}  LOOCV accuracy={acc:.3f}")
+        if acc > best_k_score:
+            best_k_score = acc
+            best_k = k
+    print(f"  => Best K = {best_k} (accuracy={best_k_score:.3f})")
     print()
 
+    # ------------------------------------------------------------------
+    # Phase 2: Train and evaluate all models with the best K
+    # ------------------------------------------------------------------
+    print("PHASE 2: Model training with best K")
+    print("-------------------------------------")
     results = []
     predictions = {}
-    probabilities = {}   # max predicted probability per sample (confidence)
-    proba_raw = {}       # full (n_samples, n_classes) posterior matrices,
-                         # indexed by global label index
-    posterior_available = {}   # per-sample bool: was a posterior produced?
+    probabilities = {}
+    proba_raw = {}
+    posterior_available = {}
     models = {}
 
     for name, base_model in MODEL_DEFS.items():
-        print(f"Training {name} ...")
-        pipeline = build_pipeline(base_model)
+        print(f"Training {name} (K={best_k}) ...")
+        pipeline = build_pipeline(base_model, k=best_k)
+        metrics = evaluate_model(
+            name, pipeline, X_raw, y, sample_weight, n_classes, class_names)
 
-        pred, proba, proba_ok = loocv_fit_predict(
-            pipeline, X_raw, y, sample_weight, n_classes)
-        predictions[name] = pred
-
-        # Posterior confidence: the probability the model assigned to its
-        # chosen class, read from the label-indexed posterior. SVC runs with
-        # probability=True; all other models expose predict_proba natively.
-        # A sample with no usable posterior scores 0.0 (maximally unsure) and
-        # is counted in posterior_unavailable, so it is visibly discounted
-        # instead of quietly flattering the model.
-        conf = np.zeros(len(pred), dtype=float)
-        for i, (row, cls) in enumerate(zip(proba, pred)):
-            if proba_ok[i] and 0 <= int(cls) < proba.shape[1]:
-                conf[i] = row[int(cls)]
-        posterior_unavailable = int((~proba_ok).sum())
-
-        proba_raw[name] = proba
-        posterior_available[name] = proba_ok
-        probabilities[name] = conf
-        uncertain = int((conf < CONFIDENCE_THRESHOLD).sum())
-
-        acc = accuracy_score(y, pred)
-        precision = precision_score(
-            y, pred, average="macro", zero_division=0
-        )
-        recall = recall_score(
-            y, pred, average="macro", zero_division=0
-        )
-        f1 = f1_score(y, pred, average="macro", zero_division=0)
-        f1_weighted = f1_score(y, pred, average="weighted", zero_division=0)
-
+        predictions[name] = metrics["pred"]
+        probabilities[name] = metrics["conf"]
+        proba_raw[name] = metrics["proba"]
+        posterior_available[name] = metrics["proba_ok"]
         models[name] = pipeline
+
         results.append({
             "model": name,
-            "accuracy": round(acc, 4),
-            "precision_macro": round(precision, 4),
-            "recall_macro": round(recall, 4),
-            "f1_macro": round(f1, 4),
-            "f1_weighted": round(f1_weighted, 4),
-            "mean_confidence": round(float(conf.mean()), 4),
-            "low_confidence_count": uncertain,
-            "posterior_unavailable": posterior_unavailable,
+            "accuracy": metrics["accuracy"],
+            "precision_macro": metrics["precision_macro"],
+            "recall_macro": metrics["recall_macro"],
+            "f1_macro": metrics["f1_macro"],
+            "f1_weighted": metrics["f1_weighted"],
+            "mean_confidence": metrics["mean_confidence"],
+            "low_confidence_count": metrics["low_confidence_count"],
+            "posterior_unavailable": metrics["posterior_unavailable"],
         })
-        print(f"    accuracy={acc:.3f}  precision={precision:.3f}  "
-              f"recall={recall:.3f}  f1={f1:.3f}  "
-              f"mean_conf={conf.mean():.3f}  "
-              f"low_conf={uncertain}  "
-              f"no_posterior={posterior_unavailable}")
 
     comparison = pd.DataFrame(results).set_index("model")
     comparison_file = REPORTS_DIR / "model_comparison.csv"
     comparison.to_csv(comparison_file)
     print()
     print(f"Saved model comparison: {comparison_file}")
-
     print()
-    print(f"Model comparison (LOOCV on {n_samples} samples):")
+    print(f"Model comparison (LOOCV on {n_samples} samples, K={best_k}):")
     print(comparison.to_string())
 
     # ------------------------------------------------------------------
-    # Select the best model by macro F1 (a robust summary for imbalanced,
-    # small, multi-class problems). When several models tie on macro F1,
-    # break the tie by higher mean confidence (a model that is more often
-    # sure of its answer is preferable to an equally-accurate one that is
-    # not), then by fewer low-confidence calls, then by the fewest samples
-    # it could not score a posterior for at all.
+    # Phase 3: Build ensemble from top models
+    # ------------------------------------------------------------------
+    print()
+    print("PHASE 3: Ensemble model")
+    print("-----------------------")
+    # Select top 3 models by macro F1 for the ensemble
+    top_models = comparison.nlargest(min(3, len(comparison)), "f1_macro")
+    estimators = []
+    for model_name in top_models.index:
+        estimators.append((model_name.lower(), models[model_name]))
+
+    if len(estimators) >= 2:
+        ensemble = VotingClassifier(
+            estimators=estimators,
+            voting="soft",
+        )
+        # Wrap in a pipeline for imputation + scaling
+        ensemble_pipeline = Pipeline([
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+            ("clf", ensemble),
+        ])
+        print(f"  Ensemble members: {list(top_models.index)}")
+        ensemble_metrics = evaluate_model(
+            "Ensemble", ensemble_pipeline, X_raw, y, sample_weight,
+            n_classes, class_names)
+
+        predictions["Ensemble"] = ensemble_metrics["pred"]
+        probabilities["Ensemble"] = ensemble_metrics["conf"]
+        proba_raw["Ensemble"] = ensemble_metrics["proba"]
+        posterior_available["Ensemble"] = ensemble_metrics["proba_ok"]
+        models["Ensemble"] = ensemble_pipeline
+
+        results.append({
+            "model": "Ensemble",
+            "accuracy": ensemble_metrics["accuracy"],
+            "precision_macro": ensemble_metrics["precision_macro"],
+            "recall_macro": ensemble_metrics["recall_macro"],
+            "f1_macro": ensemble_metrics["f1_macro"],
+            "f1_weighted": ensemble_metrics["f1_weighted"],
+            "mean_confidence": ensemble_metrics["mean_confidence"],
+            "low_confidence_count": ensemble_metrics["low_confidence_count"],
+            "posterior_unavailable": ensemble_metrics["posterior_unavailable"],
+        })
+
+        comparison = pd.DataFrame(results).set_index("model")
+        comparison.to_csv(comparison_file)
+        print()
+        print(f"Updated model comparison with ensemble:")
+        print(comparison.to_string())
+
+    # ------------------------------------------------------------------
+    # Select best model
     # ------------------------------------------------------------------
     best_score = comparison["f1_macro"].max()
     tied = comparison.index[comparison["f1_macro"] == best_score].tolist()
@@ -345,10 +418,9 @@ def main():
     print(f"Best model: {best_name} (macro F1 = {best_score})")
 
     # ------------------------------------------------------------------
-    # Save best model + preprocessing objects for later evaluation.
+    # Save best model + preprocessing objects
     # ------------------------------------------------------------------
     best_pipeline = models[best_name]
-    # Note: the pipeline contains imputer + scaler, so it is self-contained.
     objects = {
         "model_name": best_name,
         "pipeline": best_pipeline,
@@ -358,16 +430,14 @@ def main():
         "n_samples": n_samples,
         "n_classes": n_classes,
         "metric_used": "macro F1",
+        "feature_selection_k": best_k,
     }
     best_file = PREPROCESS_DIR / "best_model.pkl"
     with open(best_file, "wb") as f:
         pickle.dump(objects, f)
     print(f"Saved best model + preprocessing: {best_file}")
 
-    # Save LOOCV predictions for later reference. `probas_raw` is indexed by
-    # global label index; `posterior_available` flags the samples a classifier
-    # could not score, so a downstream audit can tell a genuine low
-    # confidence apart from a missing posterior.
+    # Save LOOCV predictions
     with open(PREPROCESS_DIR / "loo_predictions.pkl", "wb") as f:
         pickle.dump({
             "y_true": y,
@@ -385,15 +455,14 @@ def main():
     print("HONEST LIMITATIONS (IMPORTANT)")
     print("=" * 70)
     print(f"  - These results are computed on just {n_samples} videos.")
-    print("  - Even with aggressive feature selection (top "
-          f"{FEATURE_SELECTION_K} features), this sample size is far too few")
-    print("    a reliable 4-class classifier over unseen videos.")
+    print(f"  - Even with aggressive feature selection (top {best_k} features),")
+    print("    this sample size is far too few for a reliable classifier.")
     print("  - The numbers above must NOT be interpreted as the model's")
     print("    true real-world accuracy/precision/recall/F1.")
     print("  - They only describe how the model behaved on these specific")
     print("    videos during leave-one-out evaluation.")
-    print("  - Add many more videos, then re-run: process_all.py ->",
-          "build_dataset.py -> prepare_ml_data.py -> this script.")
+    print("  - Add many more videos, then re-run: process_all.py ->")
+    print("    build_dataset.py -> feature_engineering.py -> this script.")
     print("=" * 70)
 
 

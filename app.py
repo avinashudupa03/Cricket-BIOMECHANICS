@@ -26,6 +26,8 @@ from flask import (
 import shot_rating
 
 import config
+import database as db
+import auth
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -109,6 +111,9 @@ app.secret_key = os.environ.get(
 )
 # Reject oversized uploads early (Flask responds 413). Value in bytes.
 app.config["MAX_CONTENT_LENGTH"] = 512 * 1024 * 1024
+
+# Initialise authentication (sets secret key, registers /login and /logout)
+auth.init_auth(app)
 
 
 def ensure_storage_directories():
@@ -268,12 +273,18 @@ def _prune_old_jobs():
         for jid in [j for j, job in PIPELINE_JOBS.items()
                     if job.get("done") and (job.get("finished_at") or 0) < cutoff]:
             PIPELINE_JOBS.pop(jid, None)
+    # Also prune the database
+    try:
+        db.prune_old_pipeline_jobs()
+    except Exception:
+        pass
 
 
 def _pipeline_worker(job_id):
     job = PIPELINE_JOBS[job_id]
     job["current"] = "Starting analysis…"
     job["started_at"] = time.time()
+    db.update_pipeline_job(job_id, current="Starting analysis…", started_at=job["started_at"])
     video_path = Path(job["video_path"])
     command = [
         sys.executable,
@@ -307,8 +318,10 @@ def _pipeline_worker(job_id):
                         break
                 if not matched:
                     job["current"] = line[len("RUNNING:"):].strip()
+                db.update_pipeline_job(job_id, current=job["current"], steps=job["steps"])
             elif "COMPLETE" in line:
                 job["current"] = "Finalising results…"
+                db.update_pipeline_job(job_id, current=job["current"])
         proc.wait()
         job["ok"] = proc.returncode == 0
         if not job["ok"]:
@@ -324,6 +337,15 @@ def _pipeline_worker(job_id):
     with PIPELINE_JOBS_LOCK:
         job["done"] = True
         job["finished_at"] = time.time()
+    db.update_pipeline_job(
+        job_id,
+        done=True,
+        ok=job["ok"],
+        current=job["current"],
+        error=job["error"],
+        video_name=job["video_name"],
+        finished_at=job["finished_at"],
+    )
     _release_inflight(job)
 
 
@@ -911,6 +933,7 @@ def output_video_file(video_name):
 
 
 @app.route("/generate_analysis/<video_name>", methods=["POST"])
+@auth.login_required
 def generate_analysis(video_name):
     """Render the annotated analysis video on demand for a processed clip."""
     ok = ensure_analysis_video(video_name)
@@ -1035,6 +1058,7 @@ def _batch_worker(batch_id, workers):
     batch = BATCH_JOBS[batch_id]
     batch["started_at"] = time.time()
     batch["current"] = "Scanning input videos…"
+    db.update_batch_job(batch_id, started_at=batch["started_at"], current=batch["current"])
 
     # Discover all input videos (generated analysis files are never inputs)
     video_tasks = []
@@ -1054,12 +1078,17 @@ def _batch_worker(batch_id, workers):
             batch["ok"] = True
             batch["current"] = "No input videos found."
             batch["finished_at"] = time.time()
+        db.update_batch_job(
+            batch_id, done=True, ok=True,
+            current=batch["current"], finished_at=batch["finished_at"],
+        )
         return
 
     batch["total"] = len(video_tasks)
     batch["completed"] = 0
     batch["results"] = []
     batch["ok"] = True
+    db.update_batch_job(batch_id, total=batch["total"])
 
     try:
         from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -1080,6 +1109,13 @@ def _batch_worker(batch_id, workers):
                         f"{batch['completed']}/{batch['total']} done — "
                         f"latest: {video_name}"
                     )
+                db.update_batch_job(
+                    batch_id,
+                    completed=batch["completed"],
+                    ok=batch["ok"],
+                    results=batch["results"],
+                    current=batch["current"],
+                )
     except Exception as exc:
         print(f"[batch] batch {batch_id} crashed: {exc}")
         batch["error"] = str(exc)
@@ -1089,9 +1125,18 @@ def _batch_worker(batch_id, workers):
         batch["done"] = True
         batch["current"] = "Batch complete." if batch["ok"] else "Batch failed."
         batch["finished_at"] = time.time()
+    db.update_batch_job(
+        batch_id,
+        done=True,
+        ok=batch["ok"],
+        current=batch["current"],
+        error=batch["error"],
+        finished_at=batch["finished_at"],
+    )
 
 
 @app.route("/batch_process", methods=["POST"])
+@auth.login_required
 def batch_process():
     """Kick off parallel re-processing of all input videos."""
     workers = request.form.get("workers", config.MAX_WORKERS, type=int)
@@ -1111,6 +1156,7 @@ def batch_process():
     }
     with BATCH_JOBS_LOCK:
         BATCH_JOBS[batch_id] = batch
+    db.create_batch_job(batch_id)
 
     thread = threading.Thread(
         target=_batch_worker, args=(batch_id, workers), daemon=True
@@ -1120,6 +1166,7 @@ def batch_process():
 
 
 @app.route("/batch_status/<batch_id>")
+@auth.login_required
 def batch_status(batch_id):
     batch = BATCH_JOBS.get(batch_id)
     if batch is None:
@@ -1130,10 +1177,17 @@ def batch_status(batch_id):
 
 
 @app.route("/batch_status_json/<batch_id>")
+@auth.login_required
 def batch_status_json(batch_id):
     batch = BATCH_JOBS.get(batch_id)
     if batch is None:
-        return {"state": "missing"}
+        # Fall back to database (job may have been created before a restart)
+        try:
+            batch = db.get_batch_job(batch_id)
+        except Exception:
+            batch = None
+        if batch is None:
+            return {"state": "missing"}
     return {
         "state": "done" if batch.get("done") else "running",
         "ok": batch.get("ok"),
@@ -1158,6 +1212,7 @@ def inject_globals():
 
 
 @app.route("/dashboard")
+@auth.login_required
 def dashboard():
     stats = load_dataset_stats()
 
@@ -1198,6 +1253,7 @@ def dashboard():
 
 
 @app.route("/history")
+@auth.login_required
 def history():
     """Full history of every processed analysis, newest first."""
     videos = _list_processed_videos()
@@ -1210,6 +1266,7 @@ def history():
 
 
 @app.route("/upload", methods=["GET"])
+@auth.login_required
 def upload_form():
     return render_template("upload.html")
 
@@ -1296,6 +1353,7 @@ def _handle_upload_request(file, shot_type):
             }
             with PIPELINE_JOBS_LOCK:
                 PIPELINE_JOBS[job_id] = job
+            db.create_pipeline_job(job_id, str(existing_source), existing_name, shot_type, digest)
             thread = threading.Thread(target=_pipeline_worker, args=(job_id,), daemon=True)
             thread.start()
             return {
@@ -1341,6 +1399,7 @@ def _handle_upload_request(file, shot_type):
     }
     with PIPELINE_JOBS_LOCK:
         PIPELINE_JOBS[job_id] = job
+    db.create_pipeline_job(job_id, str(target), video_name, shot_type, digest)
     thread = threading.Thread(target=_pipeline_worker, args=(job_id,), daemon=True)
     thread.start()
 
@@ -1353,6 +1412,7 @@ def _handle_upload_request(file, shot_type):
 
 
 @app.route("/upload", methods=["POST"])
+@auth.login_required
 def upload_submit():
 
     shot_type = request.form.get("shot_type", "").strip().lower()
@@ -1387,6 +1447,7 @@ def upload_submit():
 
 
 @app.route("/progress/<job_id>")
+@auth.login_required
 def progress(job_id):
     job = PIPELINE_JOBS.get(job_id)
     if job is None:
@@ -1402,10 +1463,17 @@ def progress(job_id):
 
 
 @app.route("/progress_status/<job_id>")
+@auth.login_required
 def progress_status(job_id):
     job = PIPELINE_JOBS.get(job_id)
     if job is None:
-        return {"state": "missing"}
+        # Fall back to database (job may have been created before a restart)
+        try:
+            job = db.get_pipeline_job(job_id)
+        except Exception:
+            job = None
+        if job is None:
+            return {"state": "missing"}
     return {
         "state": "done" if job.get("done") else "running",
         "ok": job.get("ok"),
@@ -1418,6 +1486,7 @@ def progress_status(job_id):
 
 
 @app.route("/results/<video_name>")
+@auth.login_required
 def results(video_name):
     video_name = Path(video_name).name  # never use an unsanitised FS path
     shot_type = request.args.get("shot_type", "").strip().lower() or "unknown"
@@ -1483,7 +1552,55 @@ def _json_safe(value):
         return str(value)
 
 
+@app.route("/api/docs")
+@auth.login_required
+def api_docs():
+    """Serve Swagger UI for the API documentation."""
+    return """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cricket Biomechanics AI - API Docs</title>
+    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+    <style>
+        body { margin: 0; padding: 0; }
+        .topbar { display: none; }
+    </style>
+</head>
+<body>
+    <div id="swagger-ui"></div>
+    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+    <script>
+        SwaggerUIBundle({
+            url: '/api/openapi.yaml',
+            dom_id: '#swagger-ui',
+            deepLinking: true,
+            presets: [
+                SwaggerUIBundle.presets.apis,
+                SwaggerUIBundle.presets.standalone
+            ],
+            layout: "BaseLayout"
+        });
+    </script>
+</body>
+</html>
+"""
+
+
+@app.route("/api/openapi.yaml")
+@auth.login_required
+def api_openapi():
+    """Serve the OpenAPI specification."""
+    spec_path = BASE_DIR / "openapi.yaml"
+    if not spec_path.exists():
+        return {"error": "openapi.yaml not found"}, 404
+    return send_file(spec_path, mimetype="text/yaml")
+
+
 @app.route("/api/stats")
+@auth.login_required
 def api_stats():
     stats = load_dataset_stats()
     return jsonify({
