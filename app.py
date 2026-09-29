@@ -1715,15 +1715,55 @@ def index():
     return render_template("index.html", stats=stats)
 
 
+# Reserved top-level prefixes. A request for an unregistered path under one
+# of these is an API error, not a client-side route, and must never be
+# answered with the SPA shell.
+API_PREFIXES = ("api",)
+
+
+def _is_api_path(path):
+    """True when a URL path belongs to the JSON API namespace."""
+    head = path.split("/", 1)[0]
+    return head in API_PREFIXES
+
+
 @app.route("/<path:path>")
 def spa_fallback(path):
-    """Serve built frontend assets, falling back to the SPA shell."""
-    if (WEB_DIST / "index.html").exists():
-        target = WEB_DIST / path
-        if target.is_file():
-            return send_from_directory(WEB_DIST, path)
-        return send_from_directory(WEB_DIST, "index.html")
-    abort(404)
+    """Serve built frontend assets, falling back to the SPA shell.
+
+    Unregistered *page* routes resolve to ``index.html`` so the client-side
+    router can take over on a hard refresh. Two cases are deliberately
+    excluded, because answering either with the HTML shell produces a
+    confusing failure downstream:
+
+    * ``/api/...`` - the client checks only ``res.ok`` before calling
+      ``res.json()``, so a 200 HTML body for a missing endpoint surfaces as a
+      JSON parse ``SyntaxError`` rather than an honest 404.
+    * any path with a file extension (a missing ``.js`` / ``.css`` / ``.png``)
+      - returning HTML for an asset produces a MIME-type error in the browser
+      that points at the bundle instead of the missing file.
+    """
+    if _is_api_path(path):
+        return jsonify({"error": "Not found", "path": path}), 404
+
+    index_file = WEB_DIST / "index.html"
+    if not index_file.exists():
+        abort(404)
+
+    # A real file in the bundle always wins - hashed assets carry extensions
+    # and must not be rejected by the check below.
+    target = WEB_DIST / path
+    if target.is_file():
+        return send_from_directory(WEB_DIST, path)
+
+    # Nothing at that path. If it looked like an asset, 404: returning the
+    # HTML shell would surface in the browser as a MIME-type error that
+    # points at the bundle rather than the missing file.
+    if Path(path).suffix:
+        abort(404)
+
+    # Otherwise it is a client-side route: hand back the SPA shell.
+    return send_from_directory(WEB_DIST, "index.html")
 
 
 if __name__ == "__main__":

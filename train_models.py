@@ -139,7 +139,23 @@ def loocv_fit_predict(pipeline, X_raw, y, sample_weight, n_classes):
     the classifier (cross_val_predict does not support fit_params when
     using a Pipeline with per-step weights). Weights come from tracking
     quality and apply to the training fold only - the held-out sample is
-    always predicted with the classifier's single-sample output."""
+    always predicted with the classifier's single-sample output.
+
+    Returns ``(pred, proba, proba_ok)``.
+
+    ``proba`` is indexed by the GLOBAL label-encoder index, not by position
+    within a fold: a fold that is missing a class (routine at this sample
+    size) would otherwise shift every later column, silently corrupting both
+    the confidence figures and the top-k metrics that index by label
+    (see ``evaluate_models._top2_accuracy``). ``model.classes_`` holds the
+    labels; ``predict_proba`` returns columns in that same order, so the
+    mapping is ``proba[i, label] = p[position_of(label)]``.
+
+    A fold whose classifier cannot produce a posterior leaves its row at
+    zero and is flagged in ``proba_ok`` rather than being handed a fabricated
+    confidence - a model that cannot say how sure it is must be treated as
+    maximally unsure, not maximally certain.
+    """
     final_est = pipeline.steps[-1][1]
     supports_weights = "sample_weight" in inspect.signature(
         final_est.fit).parameters
@@ -147,6 +163,7 @@ def loocv_fit_predict(pipeline, X_raw, y, sample_weight, n_classes):
     n = len(y)
     pred = np.empty(n, dtype=int)
     proba = np.zeros((n, n_classes), dtype=float)
+    proba_ok = np.zeros(n, dtype=bool)
     loo = LeaveOneOut()
     for train_idx, test_idx in loo.split(X_raw):
         fit_kwargs = {}
@@ -157,18 +174,29 @@ def loocv_fit_predict(pipeline, X_raw, y, sample_weight, n_classes):
             y[train_idx],
             **fit_kwargs,
         )
-        pred[test_idx] = model.predict(
-            X_raw.iloc[test_idx] if hasattr(X_raw, "iloc") else X_raw[test_idx])
+        X_test = (
+            X_raw.iloc[test_idx] if hasattr(X_raw, "iloc") else X_raw[test_idx]
+        )
+        pred[test_idx] = model.predict(X_test)
+        row = int(test_idx[0])
         try:
-            p = model.predict_proba(
-                X_raw.iloc[test_idx] if hasattr(X_raw, "iloc") else X_raw[test_idx])[0]
-            # Align columns to full class order (predict_proba may omit unseen
-            # classes in a tiny training fold).
-            for cls_idx, cls in enumerate(model.classes_):
-                proba[test_idx[0], cls_idx] = p[cls]
-        except Exception:
-            proba[test_idx[0], int(pred[test_idx[0]])] = 1.0
-    return pred, proba
+            p = np.asarray(model.predict_proba(X_test)[0],
+                           dtype=float).ravel()
+            classes = np.asarray(model.classes_)
+            if len(classes) != len(p):
+                raise ValueError(
+                    f"predict_proba returned {len(p)} column(s) for "
+                    f"{len(classes)} class(es)"
+                )
+            for position, label in enumerate(classes):
+                proba[row, int(label)] = p[position]
+            proba_ok[row] = True
+        except Exception as exc:
+            print(f"    [warn] no posterior for sample {row} "
+                  f"(class {int(pred[row])}): {exc}")
+            proba[row, :] = 0.0
+            proba_ok[row] = False
+    return pred, proba, proba_ok
 
 
 def main():
@@ -222,33 +250,33 @@ def main():
     results = []
     predictions = {}
     probabilities = {}   # max predicted probability per sample (confidence)
-    proba_raw = {}       # full (n_samples, n_classes) posterior matrices
+    proba_raw = {}       # full (n_samples, n_classes) posterior matrices,
+                         # indexed by global label index
+    posterior_available = {}   # per-sample bool: was a posterior produced?
     models = {}
 
     for name, base_model in MODEL_DEFS.items():
         print(f"Training {name} ...")
         pipeline = build_pipeline(base_model)
 
-        pred, proba = loocv_fit_predict(
+        pred, proba, proba_ok = loocv_fit_predict(
             pipeline, X_raw, y, sample_weight, n_classes)
         predictions[name] = pred
 
         # Posterior confidence: the probability the model assigned to its
-        # chosen class. SVC now runs with probability=True; all other models
-        # expose predict_proba natively.
-        try:
-            if hasattr(proba, "shape") and proba.ndim == 2:
-                proba_raw[name] = proba
-                conf = np.array([
-                    p[int(c)] if int(c) < len(p) else max(p)
-                    for p, c in zip(proba, pred)
-                ])
-            else:
-                proba_raw[name] = None
-                conf = np.ones(len(pred))
-        except Exception:
-            proba_raw[name] = None
-            conf = np.ones(len(pred))
+        # chosen class, read from the label-indexed posterior. SVC runs with
+        # probability=True; all other models expose predict_proba natively.
+        # A sample with no usable posterior scores 0.0 (maximally unsure) and
+        # is counted in posterior_unavailable, so it is visibly discounted
+        # instead of quietly flattering the model.
+        conf = np.zeros(len(pred), dtype=float)
+        for i, (row, cls) in enumerate(zip(proba, pred)):
+            if proba_ok[i] and 0 <= int(cls) < proba.shape[1]:
+                conf[i] = row[int(cls)]
+        posterior_unavailable = int((~proba_ok).sum())
+
+        proba_raw[name] = proba
+        posterior_available[name] = proba_ok
         probabilities[name] = conf
         uncertain = int((conf < CONFIDENCE_THRESHOLD).sum())
 
@@ -272,11 +300,13 @@ def main():
             "f1_weighted": round(f1_weighted, 4),
             "mean_confidence": round(float(conf.mean()), 4),
             "low_confidence_count": uncertain,
+            "posterior_unavailable": posterior_unavailable,
         })
         print(f"    accuracy={acc:.3f}  precision={precision:.3f}  "
               f"recall={recall:.3f}  f1={f1:.3f}  "
               f"mean_conf={conf.mean():.3f}  "
-              f"low_conf={uncertain}")
+              f"low_conf={uncertain}  "
+              f"no_posterior={posterior_unavailable}")
 
     comparison = pd.DataFrame(results).set_index("model")
     comparison_file = REPORTS_DIR / "model_comparison.csv"
@@ -293,14 +323,16 @@ def main():
     # small, multi-class problems). When several models tie on macro F1,
     # break the tie by higher mean confidence (a model that is more often
     # sure of its answer is preferable to an equally-accurate one that is
-    # not), then by fewer low-confidence calls.
+    # not), then by fewer low-confidence calls, then by the fewest samples
+    # it could not score a posterior for at all.
     # ------------------------------------------------------------------
     best_score = comparison["f1_macro"].max()
     tied = comparison.index[comparison["f1_macro"] == best_score].tolist()
     if len(tied) > 1:
         tie_order = comparison.loc[tied].sort_values(
-            by=["mean_confidence", "low_confidence_count"],
-            ascending=[False, True],
+            by=["mean_confidence", "low_confidence_count",
+                "posterior_unavailable"],
+            ascending=[False, True, True],
         )
         best_name = tie_order.index[0]
         print()
@@ -332,7 +364,10 @@ def main():
         pickle.dump(objects, f)
     print(f"Saved best model + preprocessing: {best_file}")
 
-    # Save LOOCV predictions for later reference.
+    # Save LOOCV predictions for later reference. `probas_raw` is indexed by
+    # global label index; `posterior_available` flags the samples a classifier
+    # could not score, so a downstream audit can tell a genuine low
+    # confidence apart from a missing posterior.
     with open(PREPROCESS_DIR / "loo_predictions.pkl", "wb") as f:
         pickle.dump({
             "y_true": y,
@@ -341,6 +376,7 @@ def main():
             "predictions": predictions,
             "confidence": probabilities,
             "probas_raw": proba_raw,
+            "posterior_available": posterior_available,
             "confidence_threshold": CONFIDENCE_THRESHOLD,
         }, f)
 
