@@ -338,13 +338,15 @@ def main():
 
         debug_rows.append([
             frame_number,
+            timestamp_ms,
             item["n_detected"],
             item["selected_person_index"] if item["selected_person_index"] is not None else "",
-            int(item["tracking_ok"]),
             round(item["confidence"], 4),
-            int(item["identity_switch_detected"]),
             center[0] if center is not None else "",
             center[1] if center is not None else "",
+            int(item["identity_switch_detected"]),
+            int(not item["tracking_ok"]),
+            "",  # phase: filled in by finalize_analysis.py after phase detection
         ])
 
     # -----------------------------------------
@@ -378,13 +380,15 @@ def main():
         writer = csv.writer(fh)
         writer.writerow([
             "frame_number",
-            "number_of_detected_people",
+            "timestamp_ms",
+            "num_people_detected",
             "selected_person_index",
-            "tracking_ok",
             "tracking_confidence",
-            "identity_switch_detected",
             "batsman_center_x",
             "batsman_center_y",
+            "identity_switch",
+            "tracking_uncertain",
+            "phase",
         ])
         writer.writerows(debug_rows)
 

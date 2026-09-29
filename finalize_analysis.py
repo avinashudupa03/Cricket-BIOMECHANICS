@@ -58,6 +58,55 @@ def classify_shot(video_name):
     return result
 
 
+def _annotate_tracking_debug(video_name):
+    """Fill the ``phase`` column of tracking_debug.csv from batting_phases.csv.
+
+    main.py writes the tracking-debug rows with an empty phase placeholder
+    (phases are not known until phase_detector runs). Once the per-frame phase
+    labels exist, this joins them back onto the debug CSV so the file carries
+    the full per-frame tracking + phase record in one place.
+    """
+    import csv
+
+    folder = BASE_DIR / "output_data" / video_name
+    debug_file = folder / "tracking_debug.csv"
+    phases_file = folder / "batting_phases.csv"
+    if not debug_file.exists() or not phases_file.exists():
+        return
+
+    try:
+        phase_by_frame = {}
+        import pandas as pd
+        df = pd.read_csv(phases_file)
+        for _, row in df.iterrows():
+            phase_by_frame[int(row["frame"])] = str(row["phase"])
+
+        with open(debug_file, "r", newline="", encoding="utf-8") as fh:
+            reader = csv.reader(fh)
+            rows = list(reader)
+
+        header = rows[0]
+        if "phase" not in header:
+            return
+        phase_idx = header.index("phase")
+        frame_idx = header.index("frame_number") if "frame_number" in header else 0
+
+        for row in rows[1:]:
+            if len(row) <= phase_idx:
+                continue
+            try:
+                frame_no = int(row[frame_idx])
+            except (TypeError, ValueError):
+                continue
+            row[phase_idx] = phase_by_frame.get(frame_no, "")
+
+        with open(debug_file, "w", newline="", encoding="utf-8") as fh:
+            writer = csv.writer(fh)
+            writer.writerows(rows)
+    except Exception as exc:
+        print(f"[annotate_tracking_debug] {exc}")
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage:")
@@ -82,6 +131,9 @@ def main():
         print(f"RUNNING: {token}")
         print("=" * 56)
         run()
+
+    # Fill the phase column of tracking_debug.csv now that phases exist.
+    _annotate_tracking_debug(video_name)
 
     # Model-based shot classification (Unknown when not confident).
     classify_shot(video_name)

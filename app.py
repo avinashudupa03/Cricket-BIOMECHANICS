@@ -1220,6 +1220,13 @@ def _handle_upload_request(file, shot_type):
     Shared by the HTML form and the JSON API so both routes behave exactly
     alike. Returns a dict describing the outcome; callers translate it into
     either a redirect+flash (HTML) or a JSON response.
+
+    A clip whose bytes are already in input_videos is never rejected and never
+    copied a second time: the pipeline is simply re-queued for the file that is
+    already there, which refreshes its output_data folder in place. So the same
+    clip can be analysed as many times as you like, but input_videos holds
+    exactly one copy of any given video and it is always analysed at most once
+    per submission.
     """
     shot_type = normalise_shot_type(shot_type)
     if shot_type is None:
@@ -1259,23 +1266,18 @@ def _handle_upload_request(file, shot_type):
             tmp_path.unlink(missing_ok=True)
             return {
                 "kind": "inflight",
-                "message": "This clip was already submitted and is being processed.",
+                "message": "This clip is already being processed — try again in a moment.",
             }
 
         existing_source = find_existing_video(tmp_path, digest)
         if existing_source is not None:
+            # This exact video is already in input_videos. Analyse the file
+            # that is already there instead of writing a second byte-identical
+            # copy: re-uploading re-runs the pipeline and overwrites that one
+            # video's output_data folder. Nothing is rejected and nothing is
+            # duplicated, so the clip can be analysed any number of times.
             tmp_path.unlink(missing_ok=True)
             existing_name = existing_source.stem
-            if (OUTPUT_DATA / existing_name).exists():
-                return {
-                    "kind": "existing_results",
-                    "video_name": existing_name,
-                    "message": "This video was already analysed.",
-                }
-            # The identical file already exists in input_videos but has no
-            # output yet (previous upload was interrupted/failed). Instead of
-            # rejecting the re-upload, queue the pipeline for the existing file
-            # so the user can recover without manual intervention.
             INFLIGHT_UPLOADS.add(digest)
             _prune_old_jobs()
             job_id = uuid.uuid4().hex[:12]
@@ -1303,6 +1305,10 @@ def _handle_upload_request(file, shot_type):
                 "shot_type": shot_type,
             }
 
+        # make_unique_path guarantees the stored name is free in
+        # input_videos, output_data and output_videos, so a clip whose filename
+        # (but not whose bytes) collides with a processed video still lands in
+        # its own output folder and never clobbers an existing analysis.
         target_folder = INPUT_VIDEOS / shot_type
         target = make_unique_path(target_folder, stem, ext)
         try:
@@ -1360,10 +1366,6 @@ def upload_submit():
     if outcome["kind"] == "inflight":
         flash(outcome["message"], "info")
         return redirect(url_for("dashboard"))
-
-    if outcome["kind"] == "existing_results":
-        flash(outcome["message"], "info")
-        return redirect(url_for("results", video_name=outcome["video_name"]))
 
     if outcome["kind"] == "existing_processing":
         flash(outcome["message"], "info")
@@ -1674,12 +1676,6 @@ def api_upload():
             "job_id": outcome["job_id"],
             "video_name": outcome["video_name"],
             "shot_type": outcome["shot_type"],
-        })
-    if outcome["kind"] == "existing_results":
-        return jsonify({
-            "status": "existing",
-            "video_name": outcome["video_name"],
-            "message": outcome["message"],
         })
     if outcome["kind"] == "existing_processing":
         return jsonify({"status": "duplicate", "message": outcome["message"]}), 409

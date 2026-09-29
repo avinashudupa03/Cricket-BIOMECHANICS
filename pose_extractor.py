@@ -53,10 +53,10 @@ MIN_POSE_PRESENCE_CONFIDENCE = 0.20
 MIN_TRACKING_CONFIDENCE = 0.20
 
 # Trajectory association parameters
-MAX_GAP_FRAMES = 4          # bridge detection gaps within a trajectory
-MAX_MERGE_GAP_FRAMES = 6    # merge spatially-continuous trajectories across longer gaps
-POS_GATE = 1.3              # max allowed center displacement (in body heights) per frame
-ACCEPT_SCORE = 1.1          # association score threshold
+MAX_GAP_FRAMES = 15         # bridge detection gaps within a trajectory
+MAX_MERGE_GAP_FRAMES = 30   # merge spatially-continuous trajectories across longer gaps
+POS_GATE = 2.0              # max allowed center displacement (in body heights) per frame
+ACCEPT_SCORE = 2.5          # association score threshold
 
 FULL_BODY_HEIGHT = 0.12     # min bbox height to consider a candidate "full body";
                             # low enough that the batsman's walk-in (small) and
@@ -309,17 +309,27 @@ class PoseExtractor:
         batsman candidate. When the full pass already locked the batsman with
         good landmark visibility the band crop cannot add a better pose, so
         skipping it halves the dominant CPU cost without changing output.
+
+        The loop reads exactly the number of frames the container reports,
+        padding with an empty candidate list if a frame cannot be decoded, so
+        the returned list always has one entry per source frame. This keeps
+        the landmark CSV and the annotated output video frame-aligned.
         """
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             raise RuntimeError(f"Could not open video: {video_path}")
 
+        reported = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         per_frame = []
         frame_index = 0
-        while True:
+        while reported <= 0 or frame_index < reported:
             ok, frame = cap.read()
             if not ok:
-                break
+                # Undecodable frame: keep frame alignment by recording an
+                # empty candidate list rather than silently dropping it.
+                per_frame.append([])
+                frame_index += 1
+                continue
             timestamp_ms = int((frame_index / max(fps, 1.0)) * 1000)
             if video_preprocess.should_enhance():
                 frame = video_preprocess.enhance_frame(frame)
@@ -480,9 +490,15 @@ class PoseExtractor:
 
     @staticmethod
     def _merge_trajectories(trajectories):
-        """Merge two trajectories when the second resumes where the first left
-        off (gap <= MAX_MERGE_GAP_FRAMES and small centre displacement), i.e.
-        the same person reappeared after a short disappearance."""
+        """Merge trajectories that are spatially close and temporally
+        non-overlapping. Two trajectories are merged when the second resumes
+        near where the first left off (centres within a small multiple of body
+        height), i.e. the same person reappeared after a short disappearance.
+
+        The merge is deliberately aggressive: a fragmented batsman trajectory
+        (split by a too-strict frame-to-frame association score) is stitched
+        back together whenever the pieces line up spatially, so the identity
+        lock survives brief detection drops and pose changes."""
         if len(trajectories) < 2:
             return list(trajectories)
         result = list(trajectories)
@@ -494,14 +510,25 @@ class PoseExtractor:
                     if i == j:
                         continue
                     t1, t2 = result[i], result[j]
+                    # Ensure t1 is the earlier trajectory.
+                    if t1.frames[0] > t2.frames[0]:
+                        t1, t2 = t2, t1
+                    # Skip pairs that overlap in time (different people).
+                    if t1.frames[-1] >= t2.frames[0]:
+                        continue
                     gap_frames = t2.frames[0] - t1.frames[-1]
-                    if not (0 < gap_frames <= MAX_MERGE_GAP_FRAMES):
+                    if gap_frames <= 0 or gap_frames > MAX_MERGE_GAP_FRAMES:
                         continue
                     c1 = t1.centers[-1]
                     c2 = t2.centers[0]
                     _, h1 = bbox_size(t1.bboxes[-1])
+                    _, h2 = bbox_size(t2.bboxes[0])
                     dist = math.hypot(c1[0] - c2[0], c1[1] - c2[1])
-                    if dist <= 1.5 * max(h1, 1e-6):
+                    # Merge when the pieces line up spatially. The threshold is
+                    # generous (2.5 body heights) so a batsman who drifts a
+                    # little between fragments is still stitched together, while
+                    # a keeper/bowler standing metres away is never merged.
+                    if dist <= 2.5 * max(h1, h2, 1e-6):
                         t1.frames.extend(t2.frames)
                         t1.centers.extend(t2.centers)
                         t1.bboxes.extend(t2.bboxes)
@@ -538,6 +565,65 @@ class PoseExtractor:
         mean_h = sum(bbox_size(b)[1] for b in traj.bboxes if b) / full
         return 0.9 * mean_h + 0.7 * prior + 0.9 * coverage
 
+    def _stitch_trajectory(self, best_traj, trajectories, per_frame):
+        """Extend the locked batsman trajectory by absorbing other trajectories
+        that sit spatially on top of it.
+
+        The frame-to-frame association can still fragment a batsman into
+        several pieces (e.g. when he walks in from a different part of the
+        frame). After the best (most persistent / central / full-body)
+        trajectory is chosen, any other trajectory whose centre comes within a
+        small distance of the locked trajectory's centre line is very likely
+        the same person, so it is merged in. This recovers frames that would
+        otherwise be flagged TRACKING UNCERTAIN without ever re-anchoring onto
+        a different player: a keeper or bowler standing far away is never
+        absorbed."""
+        if best_traj is None:
+            return best_traj
+
+        # Pre-compute the locked trajectory's centre samples for proximity
+        # testing (subsample for speed on long clips).
+        lock_centers = best_traj.centers
+        lock_bboxes = best_traj.bboxes
+
+        def _min_dist_to_lock(traj):
+            """Minimum centre distance from any frame of traj to the lock."""
+            best = float("inf")
+            for c in traj.centers:
+                for lc in lock_centers:
+                    d = math.hypot(c[0] - lc[0], c[1] - lc[1])
+                    if d < best:
+                        best = d
+            return best
+
+        changed = True
+        while changed:
+            changed = False
+            for traj in list(trajectories):
+                if traj is best_traj:
+                    continue
+                # Skip trajectories that overlap the lock in time (they are
+                # different people detected alongside the batsman).
+                overlap = any(
+                    f in set(best_traj.frames) for f in traj.frames
+                )
+                if overlap:
+                    continue
+                d = _min_dist_to_lock(traj)
+                _, lh = bbox_size(lock_bboxes[-1])
+                _, th = bbox_size(traj.bboxes[-1])
+                # Absorb when the fragment sits on the batsman's centre line.
+                if d <= 1.5 * max(lh, th, 1e-6):
+                    best_traj.frames.extend(traj.frames)
+                    best_traj.centers.extend(traj.centers)
+                    best_traj.bboxes.extend(traj.bboxes)
+                    best_traj.shapes.extend(traj.shapes)
+                    best_traj.poses.extend(traj.poses)
+                    trajectories.remove(traj)
+                    changed = True
+                    break
+        return best_traj
+
     def select_batsman(self, per_frame, trajectories, total_frames):
         """Pick the single batsman identity and return per-frame poses +
         tracking confidence.
@@ -565,11 +651,14 @@ class PoseExtractor:
                 best_score = score
                 best_traj = traj
 
+        # Stitch: absorb spatially-coincident fragments of the same person so
+        # the lock covers the whole clip instead of one isolated window.
+        best_traj = self._stitch_trajectory(best_traj, trajectories, per_frame)
+
         # Track, for each frame, the candidate-list index of the pose that
         # belongs to the locked trajectory (identified by closest center).
         frame_to_cand_idx = {}
-        for traj_idx, (frame, center) in enumerate(zip(best_traj.frames,
-                                                       best_traj.centers)):
+        for frame, center in zip(best_traj.frames, best_traj.centers):
             cands = per_frame[frame]
             best_idx = None
             best_d = 1e9

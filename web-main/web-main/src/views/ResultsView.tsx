@@ -35,6 +35,8 @@ export function ResultsView({
   const [data, setData] = useState<ResultsPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  // Charts are heavy (several full-size PNGs) and are hidden until asked for.
+  const [showCharts, setShowCharts] = useState(false);
 
   useEffect(() => {
     if (!video?.name) {
@@ -45,6 +47,7 @@ export function ResultsView({
     let mounted = true;
     setLoading(true);
     setError(false);
+    setShowCharts(false);
     api
       .results(video.name)
       .then((res) => {
@@ -405,12 +408,18 @@ export function ResultsView({
       {/* Charts */}
       <Card
         title="Visual analytics"
-        subtitle="Generated plots from per-frame angles and phases"
-        action={data.plot ? (
-          <a href={`${data.output_base}${data.plot}`} target="_blank" rel="noreferrer">
-            <Badge tone="blue"><BarChart3 className="h-3 w-3" /> Full angle plot</Badge>
-          </a>
-        ) : undefined}
+        subtitle={
+          showCharts
+            ? 'Generated plots from per-frame angles and phases'
+            : `${charts.length} ${charts.length === 1 ? 'chart' : 'charts'} available — not loaded yet`
+        }
+        action={
+          showCharts && data.plot ? (
+            <a href={`${data.output_base}${data.plot}`} target="_blank" rel="noreferrer">
+              <Badge tone="blue"><BarChart3 className="h-3 w-3" /> Full angle plot</Badge>
+            </a>
+          ) : undefined
+        }
       >
         {charts.length === 0 ? (
           <EmptyState
@@ -418,16 +427,34 @@ export function ResultsView({
             title="Charts not generated yet"
             message="Charts are created lazily when the results page is first opened."
           />
+        ) : !showCharts ? (
+          <div className="flex flex-col items-center gap-3 py-6 text-center">
+            <BarChart3 className="h-6 w-6 text-brand" />
+            <p className="max-w-sm text-[13px] leading-relaxed text-ink-3">
+              {charts.length} generated {charts.length === 1 ? 'chart' : 'charts'} are ready.
+              Load them when you want to view them.
+            </p>
+            <Button variant="primary" onClick={() => setShowCharts(true)}>
+              <BarChart3 className="h-4 w-4" /> Show visual analytics
+            </Button>
+          </div>
         ) : (
-          <div className="grid gap-4 md:grid-cols-2">
-            {charts.map((c) => (
-              <div key={c.key} className="overflow-hidden rounded-xl border border-line">
-                <p className="border-b border-line bg-surface-2 px-4 py-2 text-[12.5px] font-semibold text-ink-2">
-                  {c.name}
-                </p>
-                <img src={c.url} alt={c.name} className="w-full" loading="lazy" />
-              </div>
-            ))}
+          <div className="space-y-4">
+            <div className="flex justify-end">
+              <Button variant="ghost" onClick={() => setShowCharts(false)}>
+                Hide charts
+              </Button>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              {charts.map((c) => (
+                <div key={c.key} className="overflow-hidden rounded-xl border border-line">
+                  <p className="border-b border-line bg-surface-2 px-4 py-2 text-[12.5px] font-semibold text-ink-2">
+                    {c.name}
+                  </p>
+                  <img src={c.url} alt={c.name} className="w-full" loading="lazy" />
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </Card>

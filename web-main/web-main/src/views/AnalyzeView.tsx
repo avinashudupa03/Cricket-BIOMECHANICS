@@ -17,7 +17,6 @@ type Stage =
   | { kind: 'uploading' }
   | { kind: 'running'; jobId: string; steps: string[]; current: string }
   | { kind: 'done'; videoName: string; shotType: string }
-  | { kind: 'existing'; videoName: string }
   | { kind: 'error'; message: string };
 
 export function AnalyzeView({ onOpenVideo }: { onOpenVideo: (v: VideoMeta) => void }) {
@@ -45,10 +44,6 @@ export function AnalyzeView({ onOpenVideo }: { onOpenVideo: (v: VideoMeta) => vo
     setStage({ kind: 'uploading' });
     try {
       const res = await api.upload(file, shotType);
-      if (res.status === 'existing' && res.video_name) {
-        setStage({ kind: 'existing', videoName: res.video_name });
-        return;
-      }
       if (res.status === 'queued' && res.job_id) {
         setStage({
           kind: 'running',
@@ -209,18 +204,6 @@ export function AnalyzeView({ onOpenVideo }: { onOpenVideo: (v: VideoMeta) => vo
           <div className="mt-4 flex items-start gap-2 rounded-xl bg-red-50 p-3 text-[13px] text-red-700">
             <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
             {stage.message}
-          </div>
-        )}
-
-        {stage.kind === 'existing' && (
-          <div className="mt-4 space-y-3">
-            <div className="flex items-start gap-2 rounded-xl bg-amber-50 p-3 text-[13px] text-amber-700">
-              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-              This video was already analysed.
-            </div>
-            <Button variant="secondary" className="w-full" onClick={() => onOpenVideo({ name: stage.videoName, shot_type: '', rating: null, frames: null, processed_at: '', analysis_exists: false } as VideoMeta)}>
-              View existing results <ArrowRight className="h-4 w-4" />
-            </Button>
           </div>
         )}
 
