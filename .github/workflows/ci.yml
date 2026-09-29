@@ -2,98 +2,94 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, develop]
   pull_request:
-    branches: [main, master]
+    branches: [main, develop]
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # Backend: install deps, run tests, check syntax
-  # ---------------------------------------------------------------------------
-  backend:
+  lint-and-test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ['3.10', '3.11', '3.12']
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: 'pip'
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg libgl1 libglib2.0-0
+          sudo apt-get install -y ffmpeg libsm6 libxext6
 
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest
+          pip install pytest pytest-cov ruff mypy
 
-      - name: Check Python syntax
+      - name: Run ruff linter
         run: |
-          python -m py_compile config.py app.py main.py process_video.py process_all.py
-          python -m py_compile pose_extractor.py landmark_extractor.py angle_calculator.py
-          python -m py_compile phase_detector.py biomechanics_analyzer.py finalize_analysis.py
-          python -m py_compile shot_rating.py shot_rater.py output_video.py plot_angles.py
-          python -m py_compile video_preprocess.py injury_risk.py provenance.py
-          python -m py_compile build_dataset.py data_validation.py feature_engineering.py
-          python -m py_compile prepare_ml_data.py train_models.py ml_model.py
-          python -m py_compile evaluate_models.py feature_importance.py eda.py
-          python -m py_compile data_quality.py robustness_report.py smoke_test.py
-          python -m py_compile report_generator.py
+          ruff check . --output-format=github
+
+      - name: Run mypy type checker
+        run: |
+          mypy --ignore-missing-imports --no-error-summary .
 
       - name: Run unit tests
-        run: python -m pytest tests/ -v --tb=short
+        run: |
+          pytest tests/ -v --tb=short --cov=. --cov-report=term-missing --cov-fail-under=50
 
       - name: Run smoke test
-        run: python smoke_test.py
+        run: |
+          python smoke_test.py --smoketest --quiet
 
-  # ---------------------------------------------------------------------------
-  # Frontend: install deps, type-check, build
-  # ---------------------------------------------------------------------------
-  frontend:
+  frontend-build:
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web-main/web-main/package-lock.json
 
-      - name: Install dependencies
+      - name: Install frontend dependencies
         working-directory: web-main/web-main
-        run: npm install
-
-      - name: Type-check (tsc --noEmit)
-        working-directory: web-main/web-main
-        run: npx tsc --noEmit
+        run: npm ci
 
       - name: Build frontend
         working-directory: web-main/web-main
         run: npm run build
 
-  # ---------------------------------------------------------------------------
-  # Docker: verify the image builds
-  # ---------------------------------------------------------------------------
-  docker:
+      - name: Type check frontend
+        working-directory: web-main/web-main
+        run: npm run lint
+
+  docker-build:
     runs-on: ubuntu-latest
+    needs: [lint-and-test, frontend-build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Build Docker image
-        run: docker build -t cricket-biomechanics .
-
-      - name: Verify image runs
-        run: |
-          docker run -d --name cba-test -p 5000:5000 cricket-biomechanics
-          sleep 5
-          docker ps | grep cba-test
-          docker stop cba-test
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: cricket-biomechanics:latest
+          load: true

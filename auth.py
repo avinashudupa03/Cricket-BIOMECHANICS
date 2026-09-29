@@ -62,7 +62,13 @@ def init_auth(app: Flask):
         if env_key:
             app.secret_key = env_key
         else:
-            # Generate a random key for this server instance
+            # In production, require explicit secret key
+            if os.environ.get("FLASK_ENV") == "production":
+                raise RuntimeError(
+                    "FLASK_SECRET_KEY must be set in production. "
+                    "Set it via environment variable."
+                )
+            # Generate a random key for this server instance (dev only)
             app.secret_key = secrets.token_hex(32)
             print("[auth] WARNING: FLASK_SECRET_KEY not set — using a random key.")
             print("[auth] Sessions will not survive a server restart.")

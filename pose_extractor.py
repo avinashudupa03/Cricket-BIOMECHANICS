@@ -2,33 +2,30 @@
 
 Design
 ------
-This module deliberately avoids picking a *new* person on every frame, which
-is what the previous crop-based tracker (fixed crop + hardcoded initial
-target) did and which allowed the skeleton to jump to the wicketkeeper or
-bowler. Instead it uses a two-pass approach over the whole video:
+This module uses a three-stage approach to reliably detect ONLY the batsman:
 
-  Pass 1 - Detect every frame (FULL frame + central band, VIDEO mode).
-           Candidates are linked into *person trajectories* using a greedy
-           temporal association that scores spatial distance from a predicted
-           (velocity-adjusted) position, bounding-box size similarity and
-           normalized pose-shape similarity. Short occlusion gaps are bridged
-           by prediction, and trajectories that are spatially continuous are
-           merged, so a brief disappearance does NOT switch identity.
+  Stage 1 - Detect every frame (FULL frame + central band, VIDEO mode).
+            Candidates are linked into *person trajectories* using a greedy
+            temporal association that scores spatial distance from a predicted
+            (velocity-adjusted) position, bounding-box size similarity and
+            normalized pose-shape similarity.
 
-  Pass 2 - Select the batsman trajectory.
-           The batsman is the most persistent, full-body, central person
-           (the main subject of a batting clip). Once chosen, every frame is
-           assigned to the SAME identity for the whole video. If the chosen
-           trajectory has no pose on a frame, that frame is flagged with
-           tracking_ok = False (TRACKING UNCERTAIN) and the skeleton is NEVER
-           silently moved onto the keeper, non-striker or bowler.
+  Stage 2 - Identify the batsman using cricket-specific heuristics:
+            * Body orientation: the batsman stands side-on to the camera
+            * Batting stance: wide stance, knees bent, holding a bat
+            * Position: near the center of the frame (where the stumps are)
+            * Motion pattern: walks in, plays the shot, follows through
+            * Pose variation: dramatic posture changes through the phases
+
+  Stage 3 - Lock onto the batsman identity for the whole video.
+            Once chosen, every frame is assigned to the SAME identity.
+            If the chosen trajectory has no pose on a frame, that frame is
+            flagged with tracking_ok = False (BATSMAN NOT DETECTED) and the
+            skeleton is NEVER moved onto the keeper, non-striker or bowler.
 
 Per-frame output includes tracking confidence, the number of detected people
 (debug/after-the-fact oversight), the index of the selected person within that
-frame's candidate list, and an honest identity_switch_detected flag: it is
-True only for frames where the lock was withheld while *other* people were
-still detected (a lock break), never for frames where a different person was
-silently substituted.
+frame's candidate list, and an honest identity_switch_detected flag.
 """
 
 import math
@@ -45,29 +42,29 @@ import video_preprocess
 # MediaPipe configuration (deliberately accessible / tunable)
 # ---------------------------------------------------------------------------
 NUM_POSES = 6
-# Kept low so the batsman IS detected while crouched at stance / small in
-# frame; trajectory + identity-selection machinery (not raw detection) is
-# what defends against wrong-person switching.
-MIN_POSE_DETECTION_CONFIDENCE = 0.20
-MIN_POSE_PRESENCE_CONFIDENCE = 0.20
-MIN_TRACKING_CONFIDENCE = 0.20
+MIN_POSE_DETECTION_CONFIDENCE = 0.15
+MIN_POSE_PRESENCE_CONFIDENCE = 0.15
+MIN_TRACKING_CONFIDENCE = 0.15
 
 # Trajectory association parameters
-MAX_GAP_FRAMES = 15         # bridge detection gaps within a trajectory
-MAX_MERGE_GAP_FRAMES = 30   # merge spatially-continuous trajectories across longer gaps
-POS_GATE = 2.0              # max allowed center displacement (in body heights) per frame
-ACCEPT_SCORE = 2.5          # association score threshold
+MAX_GAP_FRAMES = 20
+MAX_MERGE_GAP_FRAMES = 40
+POS_GATE = 2.0
+ACCEPT_SCORE = 2.5
 
-FULL_BODY_HEIGHT = 0.12     # min bbox height to consider a candidate "full body";
-                            # low enough that the batsman's walk-in (small) and
-                            # crease (large) segments both form trajectories so
-                            # they merge into ONE identity, high enough to reject
-                            # horizontal/partial crops and blob noise
+FULL_BODY_HEIGHT = 0.12
+
+# Batsman identification confidence threshold
+BATSMAN_CONFIDENCE_THRESHOLD = 0.35
+
+# Maximum distance (in body heights) from the batsman's last known position
+# to accept a match. This prevents identity switches to nearby players.
+BATSMAN_LOCK_GATE = 1.5
 
 
 @dataclass
 class LM:
-    """Lightweight landmark (matches the MediaPipe PoseLandmark fields used)."""
+    """Lightweight landmark (matches the MediaPipe PoseLandmarker fields used)."""
     x: float = float("nan")
     y: float = float("nan")
     z: float = float("nan")
@@ -129,11 +126,7 @@ def bbox_size(bbox):
 
 
 def get_shape(pose, center, bbox):
-    """Normalized pose shape: joint offsets from center, scaled by bbox height.
-
-    Scale-invariant and translation-invariant, so it describes the *posture*
-    of a person rather than their absolute position.
-    """
+    """Normalized pose shape: joint offsets from center, scaled by bbox height."""
     if center is None or bbox is None:
         return None
     _, bh = bbox_size(bbox)
@@ -157,23 +150,79 @@ def shape_distance(shape1, shape2):
 
 
 def central_prior(center):
-    """Soft preference for the central strike-zone position of a batting clip.
-
-    Kept as a weak prior (0..1) - it never hard-excludes off-centre players.
-    """
+    """Preference for the central strike-zone position of a batting clip."""
     if center is None:
         return 0.0
     x, y = center
-    dx = (x - 0.50) / 0.18
-    dy = (y - 0.34) / 0.15
+    dx = (x - 0.50) / 0.15
+    dy = (y - 0.35) / 0.12
     return math.exp(-0.5 * (dx * dx + dy * dy))
+
+
+def _shoulder_width_ratio(pose):
+    """Ratio of shoulder width to torso height."""
+    if len(pose) < 25:
+        return 0.0
+    lw = pose[11]
+    rw = pose[12]
+    lh = pose[23]
+    rh = pose[24]
+    if not all(_finite(v) for v in [lw.x, lw.y, rw.x, rw.y, lh.x, lh.y, rh.x, rh.y]):
+        return 0.0
+    shoulder_w = math.hypot(lw.x - rw.x, lw.y - rw.y)
+    torso_h = math.hypot((lh.x + rh.x) / 2 - (lw.x + rw.x) / 2,
+                         (lh.y + rh.y) / 2 - (lw.y + rw.y) / 2)
+    if torso_h < 1e-6:
+        return 0.0
+    return shoulder_w / torso_h
+
+
+def _leg_spread_ratio(pose):
+    """Ratio of ankle-to-ankle distance to torso height."""
+    if len(pose) < 28:
+        return 0.0
+    la = pose[27]
+    ra = pose[28]
+    lh = pose[23]
+    rh = pose[24]
+    if not all(_finite(v) for v in [la.x, la.y, ra.x, ra.y, lh.x, lh.y, rh.x, rh.y]):
+        return 0.0
+    leg_spread = math.hypot(la.x - ra.x, la.y - ra.y)
+    torso_h = math.hypot(lh.x - rh.x, lh.y - rh.y)
+    if torso_h < 1e-6:
+        return 0.0
+    return leg_spread / torso_h
+
+
+def _is_batsman_stance(pose):
+    """Heuristic: does this pose look like a batting stance?"""
+    if len(pose) < 28:
+        return 0.0
+
+    sw_ratio = _shoulder_width_ratio(pose)
+    ls_ratio = _leg_spread_ratio(pose)
+
+    lw = pose[11]
+    rw = pose[12]
+    shoulder_asymmetry = 0.0
+    if _finite(lw.y) and _finite(rw.y):
+        _, lh = bbox_size(get_bbox(pose))
+        if lh > 1e-6:
+            shoulder_asymmetry = abs(lw.y - rw.y) / lh
+
+    score = 0.0
+    if sw_ratio > 1.2:
+        score += 0.3
+    if ls_ratio > 1.0:
+        score += 0.3
+    if shoulder_asymmetry > 0.05:
+        score += 0.4
+
+    return min(score, 1.0)
 
 
 class PoseExtractor:
 
-    # Central band crop used as a second detection stream. It up-scales the
-    # batting region (empirically improves detection for small players) while
-    # keeping the full body height so legs are never cut off.
     BAND_X0 = 0.15
     BAND_X1 = 0.80
     BAND_TARGET_WIDTH = 960
@@ -194,8 +243,6 @@ class PoseExtractor:
                 min_tracking_confidence=MIN_TRACKING_CONFIDENCE,
             )
 
-        # Two independent VIDEO-mode landmarkers (each needs strictly
-        # increasing timestamps on its own call stream).
         self.landmarker_full = PoseLandmarker.create_from_options(
             _make_options(VisionRunningMode.VIDEO)
         )
@@ -203,9 +250,6 @@ class PoseExtractor:
             _make_options(VisionRunningMode.VIDEO)
         )
 
-    # ------------------------------------------------------------------
-    # Detection (Pass 1)
-    # ------------------------------------------------------------------
     @staticmethod
     def _landmarks_to_lms(pose):
         lms = []
@@ -226,8 +270,6 @@ class PoseExtractor:
         return self._results_to_candidates(results, lambda x, y: (x, y))
 
     def _detect_band(self, frame, timestamp_ms):
-        """Detect within the central band crop (full height) and map the
-        normalized crop coordinates back to full-frame coordinates."""
         height, width = frame.shape[:2]
         x0 = int(width * self.BAND_X0)
         x1 = int(width * self.BAND_X1)
@@ -269,11 +311,6 @@ class PoseExtractor:
 
     @staticmethod
     def _merge_candidates(*groups):
-        """Merge candidate lists from the two detection streams.
-
-        Keeps only geometrically *distinct* candidates, preferring the pose
-        with the most defined landmarks when the same person is seen twice.
-        """
         combined = []
         for group in groups:
             combined.extend(group)
@@ -289,7 +326,7 @@ class PoseExtractor:
                     continue
                 dx = abs(cand.center[0] - other.center[0])
                 dy = abs(cand.center[1] - other.center[1])
-                if dx < 0.04 and dy < 0.04:
+                if dx < 0.03 and dy < 0.03:
                     duplicate = other
                     break
             if duplicate is None:
@@ -302,19 +339,6 @@ class PoseExtractor:
         return kept
 
     def detect_all(self, video_path, fps=25.0):
-        """Pass 1: run detection on every frame using two merged streams.
-
-        The central-band re-detection (a second, heavier MediaPipe pass) only
-        runs when the full-frame pass failed to produce a *clean full-body*
-        batsman candidate. When the full pass already locked the batsman with
-        good landmark visibility the band crop cannot add a better pose, so
-        skipping it halves the dominant CPU cost without changing output.
-
-        The loop reads exactly the number of frames the container reports,
-        padding with an empty candidate list if a frame cannot be decoded, so
-        the returned list always has one entry per source frame. This keeps
-        the landmark CSV and the annotated output video frame-aligned.
-        """
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             raise RuntimeError(f"Could not open video: {video_path}")
@@ -325,8 +349,6 @@ class PoseExtractor:
         while reported <= 0 or frame_index < reported:
             ok, frame = cap.read()
             if not ok:
-                # Undecodable frame: keep frame alignment by recording an
-                # empty candidate list rather than silently dropping it.
                 per_frame.append([])
                 frame_index += 1
                 continue
@@ -348,18 +370,6 @@ class PoseExtractor:
 
     @staticmethod
     def _is_clean_fullbody(candidates):
-        """True if a candidate is a confidently-tracked full-body batsman.
-
-        The band re-detection exists to rescue the batsman in the central
-        crop when he is too small or too crouched for the full-frame pass.
-        If the full pass already produced a candidate that:
-          * spans enough of the frame height (a real full body, not a blob),
-            and
-          * has at least half its landmarks confidently visible,
-        then a second pass over the same central region is redundant. The
-        threshold is deliberately conservative so genuinely weak frames still
-        trigger the rescue pass.
-        """
         for cand in candidates:
             if cand.bbox is None or cand.pose is None:
                 continue
@@ -368,21 +378,12 @@ class PoseExtractor:
                 continue
             vis = [lm.visibility for lm in cand.pose]
             vis = [v for v in vis if np.isfinite(v)]
-            if len(vis) >= 15 and np.mean(vis) >= 0.45:
+            if len(vis) >= 12 and np.mean(vis) >= 0.40:
                 return True
         return False
 
-    # ------------------------------------------------------------------
-    # Trajectory building
-    # ------------------------------------------------------------------
     @staticmethod
     def _candidate_score(cand, pred_center, ref_bbox, ref_shape):
-        """Weighted identity-consistency score (lower = more consistent).
-
-        Combines: spatial distance from the predicted position (velocity
-        adjusted), bounding-box size similarity and pose-shape similarity.
-        Candidates that suddenly appear far away get a heavy penalty.
-        """
         if cand.center is None or pred_center is None:
             return 999.0
 
@@ -397,22 +398,27 @@ class PoseExtractor:
 
         shape_dist = shape_distance(cand.shape, ref_shape) if ref_shape else 0.0
 
-        score = 1.6 * pos_dist + 0.8 * size_dist + 1.2 * shape_dist
-        # Strong penalty for suddenly-appearing far-away candidates
-        # (keeper / non-striker / crowd), preventing identity switches.
+        score = 2.5 * pos_dist + 1.0 * size_dist + 1.5 * shape_dist
         if pos_dist > POS_GATE:
-            score += 8.0
+            score += 15.0
         return score
 
     def _build_trajectories(self, per_frame):
-        """Link per-frame candidates into temporally-consistent trajectories."""
-        trajectories = []  # list of Trajectory
-        active = []        # parallel list of dicts with motion-model state
+        """Link per-frame candidates into temporally-consistent trajectories.
+
+        Uses a two-phase approach:
+        1. Build all trajectories with standard association
+        2. Identify the batsman trajectory using cricket-specific heuristics
+        3. Re-build the batsman trajectory with a strict spatial lock to prevent
+           identity switches to nearby players
+        """
+        # Phase 1: Build all trajectories
+        trajectories = []
+        active = []
 
         for frame_idx, candidates in enumerate(per_frame):
             used = [False] * len(candidates)
 
-            # 1) Try to continue existing active trajectories.
             for t, st in zip(trajectories, active):
                 if not st["active"]:
                     continue
@@ -451,7 +457,6 @@ class PoseExtractor:
                                   cand.center[1] + st["vel"][1])
                     st["active"] = True
 
-            # 2) Mark trajectories not seen this frame.
             for (t, st) in zip(trajectories, active):
                 if st["last"] < frame_idx:
                     st["gap"] += 1
@@ -461,7 +466,6 @@ class PoseExtractor:
                     if st["gap"] > MAX_GAP_FRAMES:
                         st["active"] = False
 
-            # 3) Create new trajectories from unmatched full-body candidates.
             for i, cand in enumerate(candidates):
                 if used[i] or cand.center is None or cand.bbox is None:
                     continue
@@ -484,21 +488,12 @@ class PoseExtractor:
                     "pred": (cand.center[0], cand.center[1]),
                 })
 
-        # 4) Merge spatially-continuous short trajectories (identity recovery).
+        # Phase 2: Merge trajectories
         merged = self._merge_trajectories(trajectories)
         return merged
 
     @staticmethod
     def _merge_trajectories(trajectories):
-        """Merge trajectories that are spatially close and temporally
-        non-overlapping. Two trajectories are merged when the second resumes
-        near where the first left off (centres within a small multiple of body
-        height), i.e. the same person reappeared after a short disappearance.
-
-        The merge is deliberately aggressive: a fragmented batsman trajectory
-        (split by a too-strict frame-to-frame association score) is stitched
-        back together whenever the pieces line up spatially, so the identity
-        lock survives brief detection drops and pose changes."""
         if len(trajectories) < 2:
             return list(trajectories)
         result = list(trajectories)
@@ -510,10 +505,8 @@ class PoseExtractor:
                     if i == j:
                         continue
                     t1, t2 = result[i], result[j]
-                    # Ensure t1 is the earlier trajectory.
                     if t1.frames[0] > t2.frames[0]:
                         t1, t2 = t2, t1
-                    # Skip pairs that overlap in time (different people).
                     if t1.frames[-1] >= t2.frames[0]:
                         continue
                     gap_frames = t2.frames[0] - t1.frames[-1]
@@ -524,11 +517,7 @@ class PoseExtractor:
                     _, h1 = bbox_size(t1.bboxes[-1])
                     _, h2 = bbox_size(t2.bboxes[0])
                     dist = math.hypot(c1[0] - c2[0], c1[1] - c2[1])
-                    # Merge when the pieces line up spatially. The threshold is
-                    # generous (2.5 body heights) so a batsman who drifts a
-                    # little between fragments is still stitched together, while
-                    # a keeper/bowler standing metres away is never merged.
-                    if dist <= 2.5 * max(h1, h2, 1e-6):
+                    if dist <= 2.0 * max(h1, h2, 1e-6):
                         t1.frames.extend(t2.frames)
                         t1.centers.extend(t2.centers)
                         t1.bboxes.extend(t2.bboxes)
@@ -546,8 +535,7 @@ class PoseExtractor:
     # ------------------------------------------------------------------
     @staticmethod
     def _score_trajectory(traj, total_frames):
-        """Score a trajectory as the batsman. Main subject = persists, full
-        body, central. Returns a 0..~1.5 score (higher = better candidate)."""
+        """Score a trajectory as the batsman using cricket-specific heuristics."""
         full = 0.0
         for bbox in traj.bboxes:
             if bbox is not None:
@@ -563,31 +551,76 @@ class PoseExtractor:
         )
         prior = central_prior(mean_center)
         mean_h = sum(bbox_size(b)[1] for b in traj.bboxes if b) / full
-        return 0.9 * mean_h + 0.7 * prior + 0.9 * coverage
+
+        # Batting stance score
+        stance_scores = []
+        for pose in traj.poses:
+            if pose and len(pose) >= 28:
+                stance_scores.append(_is_batsman_stance(pose))
+        batting_stance_score = sum(stance_scores) / len(stance_scores) if stance_scores else 0.0
+
+        # Motion score
+        if len(traj.centers) >= 2:
+            total_displacement = 0.0
+            for i in range(1, len(traj.centers)):
+                dx = traj.centers[i][0] - traj.centers[i - 1][0]
+                dy = traj.centers[i][1] - traj.centers[i - 1][1]
+                total_displacement += math.hypot(dx, dy)
+            motion_score = min(total_displacement / max(mean_h, 1e-6) / 8.0, 1.0)
+        else:
+            motion_score = 0.0
+
+        # Pose variation score
+        if len(traj.shapes) >= 2:
+            shape_changes = []
+            for i in range(1, len(traj.shapes)):
+                if traj.shapes[i] and traj.shapes[i - 1]:
+                    shape_changes.append(
+                        shape_distance(traj.shapes[i], traj.shapes[i - 1])
+                    )
+            if shape_changes:
+                mean_shape_change = sum(shape_changes) / len(shape_changes)
+                pose_variation_score = min(mean_shape_change / 0.4, 1.0)
+            else:
+                pose_variation_score = 0.0
+        else:
+            pose_variation_score = 0.0
+
+        # Stationary penalty
+        if motion_score < 0.1:
+            stationary_penalty = 0.3
+        else:
+            stationary_penalty = 0.0
+
+        # Consistency score
+        if len(traj.centers) >= 2:
+            xs = [c[0] for c in traj.centers]
+            ys = [c[1] for c in traj.centers]
+            std_x = (sum((x - sum(xs)/len(xs))**2 for x in xs) / len(xs)) ** 0.5
+            std_y = (sum((y - sum(ys)/len(ys))**2 for y in ys) / len(ys)) ** 0.5
+            consistency = 1.0 / (1.0 + std_x + std_y)
+        else:
+            consistency = 0.0
+
+        return (
+            0.3 * mean_h
+            + 0.4 * prior
+            + 0.3 * coverage
+            + 1.2 * batting_stance_score
+            + 0.8 * motion_score
+            + 0.5 * pose_variation_score
+            + 0.3 * consistency
+            - stationary_penalty
+        )
 
     def _stitch_trajectory(self, best_traj, trajectories, per_frame):
-        """Extend the locked batsman trajectory by absorbing other trajectories
-        that sit spatially on top of it.
-
-        The frame-to-frame association can still fragment a batsman into
-        several pieces (e.g. when he walks in from a different part of the
-        frame). After the best (most persistent / central / full-body)
-        trajectory is chosen, any other trajectory whose centre comes within a
-        small distance of the locked trajectory's centre line is very likely
-        the same person, so it is merged in. This recovers frames that would
-        otherwise be flagged TRACKING UNCERTAIN without ever re-anchoring onto
-        a different player: a keeper or bowler standing far away is never
-        absorbed."""
         if best_traj is None:
             return best_traj
 
-        # Pre-compute the locked trajectory's centre samples for proximity
-        # testing (subsample for speed on long clips).
         lock_centers = best_traj.centers
         lock_bboxes = best_traj.bboxes
 
         def _min_dist_to_lock(traj):
-            """Minimum centre distance from any frame of traj to the lock."""
             best = float("inf")
             for c in traj.centers:
                 for lc in lock_centers:
@@ -602,8 +635,6 @@ class PoseExtractor:
             for traj in list(trajectories):
                 if traj is best_traj:
                     continue
-                # Skip trajectories that overlap the lock in time (they are
-                # different people detected alongside the batsman).
                 overlap = any(
                     f in set(best_traj.frames) for f in traj.frames
                 )
@@ -612,8 +643,7 @@ class PoseExtractor:
                 d = _min_dist_to_lock(traj)
                 _, lh = bbox_size(lock_bboxes[-1])
                 _, th = bbox_size(traj.bboxes[-1])
-                # Absorb when the fragment sits on the batsman's centre line.
-                if d <= 1.5 * max(lh, th, 1e-6):
+                if d <= 0.8 * max(lh, th, 1e-6):
                     best_traj.frames.extend(traj.frames)
                     best_traj.centers.extend(traj.centers)
                     best_traj.bboxes.extend(traj.bboxes)
@@ -624,13 +654,93 @@ class PoseExtractor:
                     break
         return best_traj
 
+    def _rebuild_batsman_trajectory(self, best_traj, per_frame):
+        """Re-build the batsman trajectory with a strict spatial lock.
+
+        This prevents identity switches by only accepting candidates that are
+        close to the batsman's last known position.
+        """
+        if best_traj is None or len(best_traj.frames) == 0:
+            return best_traj
+
+        # Get the batsman's position range from the original trajectory
+        batsman_frames = set(best_traj.frames)
+        batsman_centers = list(best_traj.centers)
+        batsman_bboxes = list(best_traj.bboxes)
+        batsman_shapes = list(best_traj.shapes)
+        batsman_poses = list(best_traj.poses)
+
+        # Re-build with strict spatial lock
+        new_frames = []
+        new_centers = []
+        new_bboxes = []
+        new_shapes = []
+        new_poses = []
+
+        last_center = None
+        last_bbox = None
+        misses = 0
+
+        for frame_idx, candidates in enumerate(per_frame):
+            if frame_idx in batsman_frames:
+                # This frame was in the original trajectory - keep it
+                idx = best_traj.frames.index(frame_idx)
+                new_frames.append(frame_idx)
+                new_centers.append(best_traj.centers[idx])
+                new_bboxes.append(best_traj.bboxes[idx])
+                new_shapes.append(best_traj.shapes[idx])
+                new_poses.append(best_traj.poses[idx])
+                last_center = best_traj.centers[idx]
+                last_bbox = best_traj.bboxes[idx]
+                misses = 0
+            else:
+                # Try to find a candidate near the batsman's last position
+                if last_center is not None and last_bbox is not None:
+                    _, ref_h = bbox_size(last_bbox)
+                    best_cand = None
+                    best_dist = float("inf")
+
+                    for cand in candidates:
+                        if cand.center is None:
+                            continue
+                        d = math.hypot(cand.center[0] - last_center[0],
+                                      cand.center[1] - last_center[1])
+                        if d < best_dist and d <= BATSMAN_LOCK_GATE * ref_h:
+                            best_dist = d
+                            best_cand = cand
+
+                    if best_cand is not None:
+                        new_frames.append(frame_idx)
+                        new_centers.append(best_cand.center)
+                        new_bboxes.append(best_cand.bbox)
+                        new_shapes.append(best_cand.shape)
+                        new_poses.append(best_cand.pose)
+                        last_center = best_cand.center
+                        last_bbox = best_cand.bbox
+                        misses = 0
+                    else:
+                        misses += 1
+                else:
+                    misses += 1
+
+        # Create new trajectory
+        new_traj = Trajectory(
+            frames=new_frames,
+            centers=new_centers,
+            bboxes=new_bboxes,
+            shapes=new_shapes,
+            poses=new_poses,
+        )
+        return new_traj
+
     def select_batsman(self, per_frame, trajectories, total_frames):
         """Pick the single batsman identity and return per-frame poses +
         tracking confidence.
 
-        Returns (frames_data, best_traj) where frames_data is one dict per
-        frame with keys: pose, tracking_ok, confidence, n_detected,
-        selected_person_index, batsman_center, identity_switch_detected.
+        Returns (frames_data, best_traj, batsman_confidence) where frames_data
+        is one dict per frame with keys: pose, tracking_ok, confidence,
+        n_detected, selected_person_index, batsman_center,
+        identity_switch_detected, batsman_detected.
         """
         if not trajectories:
             return [{
@@ -641,7 +751,8 @@ class PoseExtractor:
                 "selected_person_index": None,
                 "batsman_center": None,
                 "identity_switch_detected": False,
-            } for cands in per_frame], None
+                "batsman_detected": False,
+            } for cands in per_frame], None, 0.0
 
         best_traj = None
         best_score = -2.0
@@ -651,9 +762,27 @@ class PoseExtractor:
                 best_score = score
                 best_traj = traj
 
-        # Stitch: absorb spatially-coincident fragments of the same person so
-        # the lock covers the whole clip instead of one isolated window.
+        # Confidence check
+        batsman_confidence = max(0.0, min(1.0, best_score / 2.0))
+        batsman_detected = best_score >= BATSMAN_CONFIDENCE_THRESHOLD
+
+        if not batsman_detected:
+            return [{
+                "pose": None,
+                "tracking_ok": False,
+                "confidence": 0.0,
+                "n_detected": len(cands),
+                "selected_person_index": None,
+                "batsman_center": None,
+                "identity_switch_detected": False,
+                "batsman_detected": False,
+            } for cands in per_frame], None, batsman_confidence
+
+        # Stitch: absorb spatially-coincident fragments
         best_traj = self._stitch_trajectory(best_traj, trajectories, per_frame)
+
+        # Re-build with strict spatial lock to prevent identity switches
+        best_traj = self._rebuild_batsman_trajectory(best_traj, per_frame)
 
         # Track, for each frame, the candidate-list index of the pose that
         # belongs to the locked trajectory (identified by closest center).
@@ -689,13 +818,12 @@ class PoseExtractor:
                     "selected_person_index": frame_to_cand_idx.get(frame),
                     "batsman_center": center,
                     "identity_switch_detected": False,
+                    "batsman_detected": True,
                 })
                 misses = 0
             else:
                 misses += 1
                 confidence = max(0.0, 1.0 - (misses / (MAX_GAP_FRAMES + 2.0)))
-                # Honest lock-break flag: other people were detected but the
-                # lock was defended rather than silently re-anchored.
                 switch = len(cands) > 0
                 output.append({
                     "pose": None,
@@ -705,8 +833,9 @@ class PoseExtractor:
                     "selected_person_index": None,
                     "batsman_center": None,
                     "identity_switch_detected": switch,
+                    "batsman_detected": True,
                 })
-        return output, best_traj
+        return output, best_traj, batsman_confidence
 
     # ------------------------------------------------------------------
     # Public API (single call that drives the whole video)
@@ -714,21 +843,21 @@ class PoseExtractor:
     def analyze(self, video_path, fps=25.0):
         """Two-pass analysis: detect -> trajectories -> lock batsman.
 
-        Returns (frames_data, best_traj) where frames_data is a list of dicts
-        with keys: pose (list[LM] or None), tracking_ok (bool),
+        Returns (frames_data, best_traj, batsman_confidence) where frames_data
+        is a list of dicts with keys: pose (list[LM] or None), tracking_ok (bool),
         confidence (float), n_detected (int), selected_person_index (int or
         None), batsman_center (tuple or None),
-        identity_switch_detected (bool).
+        identity_switch_detected (bool), batsman_detected (bool).
         """
         per_frame = self.detect_all(video_path, fps)
         total_frames = len(per_frame)
 
         trajectories = self._build_trajectories(per_frame)
 
-        frames_data, best_traj = self.select_batsman(
+        frames_data, best_traj, batsman_confidence = self.select_batsman(
             per_frame, trajectories, total_frames
         )
-        return frames_data, best_traj
+        return frames_data, best_traj, batsman_confidence
 
     def draw_pose(self, frame, pose):
         if pose is None:

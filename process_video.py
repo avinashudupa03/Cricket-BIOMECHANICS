@@ -32,10 +32,10 @@ def main():
     if len(sys.argv) < 2:
 
         print("Usage:")
-        print("python process_video.py <video_path>")
+        print("python process_video.py <video_path> [shot_type]")
         print()
         print("Example:")
-        print("python process_video.py input_videos\\defence.avi")
+        print("python process_video.py input_videos\\defence.avi defence")
         return
 
     video_path = Path(sys.argv[1]).resolve()
@@ -49,11 +49,15 @@ def main():
 
     video_name = video_path.stem
 
+    # Use provided shot_type or fall back to parent folder name
+    shot_type = sys.argv[2] if len(sys.argv) > 2 else Path(video_path).parent.name
+
     print()
     print("===================================")
     print("CRICKET BIOMECHANICS PIPELINE")
     print("===================================")
     print(f"Video: {video_path}")
+    print(f"Shot type: {shot_type}")
     print()
 
 # -----------------------------------------
@@ -71,8 +75,6 @@ def main():
     # Step 2-5: Angles, phases, features and rating run in ONE process to
     # avoid paying for four separate Python/pandas startups.
     # -----------------------------------------
-
-    shot_type = Path(video_path).parent.name
 
     run_step([
         sys.executable,

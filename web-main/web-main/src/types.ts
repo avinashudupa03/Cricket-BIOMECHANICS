@@ -1,3 +1,7 @@
+// Generated types (single source of truth for shot types)
+export { SHOT_TYPES, SHOT_TYPE_LABELS, shotLabel } from './types.generated';
+export type { ShotType } from './types.generated';
+
 export type NavRoute =
   | 'dashboard'
   | 'analyze'
@@ -133,31 +137,6 @@ export interface ResultsPayload {
   analysis_url: string | null;
   output_base: string;
   ml?: MLInsights;
-}
-
-export const SHOT_TYPES = [
-  'cut',
-  'defence',
-  'drive',
-  'flick',
-  'pull shot',
-  'unknown',
-] as const;
-export type ShotType = (typeof SHOT_TYPES)[number];
-
-export const SHOT_TYPE_LABELS: Record<string, string> = {
-  cut: 'Cut',
-  defence: 'Defence',
-  drive: 'Drive',
-  flick: 'Flick',
-  'pull shot': 'Pull Shot',
-  unknown: 'Unknown',
-};
-
-/** Human-readable label for a shot_type value from the API. */
-export function shotLabel(shotType: string | null | undefined): string {
-  if (!shotType) return 'Unknown';
-  return SHOT_TYPE_LABELS[shotType.toLowerCase()] ?? shotType;
 }
 
 export const PHASE_COLORS: Record<string, string> = {

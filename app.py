@@ -286,10 +286,12 @@ def _pipeline_worker(job_id):
     job["started_at"] = time.time()
     db.update_pipeline_job(job_id, current="Starting analysis…", started_at=job["started_at"])
     video_path = Path(job["video_path"])
+    shot_type = job.get("shot_type", "unknown")
     command = [
         sys.executable,
         str(BASE_DIR / "process_video.py"),
         str(video_path),
+        shot_type,
     ]
     try:
         env = dict(os.environ)

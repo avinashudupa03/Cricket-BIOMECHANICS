@@ -201,8 +201,16 @@ def draw_overlay(frame, info):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
     # ---- Tracking state (left, under the title) ---------------------------
-    track_label = f"TRACK CONF {track_conf:.2f}" if track_ok else "TRACKING UNCERTAIN"
-    track_col = (102, 217, 255) if track_ok else (255, 84, 84)
+    batsman_detected = info.get("batsman_detected", True)
+    if not batsman_detected:
+        track_label = "BATSMAN NOT DETECTED"
+        track_col = (255, 84, 84)
+    elif track_ok:
+        track_label = f"TRACK CONF {track_conf:.2f}"
+        track_col = (102, 217, 255)
+    else:
+        track_label = "TRACKING UNCERTAIN"
+        track_col = (255, 84, 84)
     cv2.putText(frame, track_label, (16, 84),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, track_col, 1)
 
@@ -383,6 +391,7 @@ def main():
             "pose": frame_poses.get(frame_no),
             "track_ok": ok_flag,
             "track_conf": conf,
+            "batsman_detected": ok_flag,
         }
         draw_overlay(frame, info)
         # Fidelity: exactly ONE output frame per input frame.

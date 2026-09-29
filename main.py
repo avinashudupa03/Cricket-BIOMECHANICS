@@ -209,7 +209,7 @@ def main():
     # MediaPipe model
     # -----------------------------------------
 
-    model_path = BASE_DIR / "models" / "pose_landmarker_full.task"
+    model_path = BASE_DIR / "models" / "pose_landmarker_heavy.task"
 
     if not model_path.exists():
 
@@ -287,7 +287,7 @@ def main():
           "central band)...")
     print()
 
-    frames_data, best_traj = pose_extractor.analyze(
+    frames_data, best_traj, batsman_confidence = pose_extractor.analyze(
         str(input_video),
         fps=fps
     )
@@ -295,8 +295,9 @@ def main():
     total_frames = len(frames_data)
 
     if best_traj is None:
-        print("[WARN] No batsman trajectory could be locked - all frames "
-              "will be TRACKING UNCERTAIN.")
+        print("[WARN] BATSMAN NOT DETECTED - could not confidently identify "
+              "the batsman in this video.")
+        print(f"[WARN] Batsman confidence: {batsman_confidence:.3f}")
 
     # -----------------------------------------
     # Short-gap interpolation + light temporal smoothing of the locked poses

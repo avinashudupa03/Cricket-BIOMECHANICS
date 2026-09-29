@@ -29,15 +29,51 @@ import ml_model
 BASE_DIR = Path(__file__).resolve().parent
 
 
-def classify_shot(video_name):
+def classify_shot(video_name, shot_type=None):
     """Run the trained shot classifier over this clip's features.
 
-    Writes output_data/<video_name>/shot_classification.json. The result is
-    the model's own prediction plus a confidence; a clip the model is not
-    confident about is reported as Unknown rather than forced into a named
-    shot. Classification never fails the pipeline - if the model is missing
-    or the features are unusable the clip is simply reported as Unknown.
+    If ``shot_type`` is provided (from upload selection), use it as the
+    classification instead of running the ML model. This ensures the
+    classification matches the user's label.
+
+    Writes output_data/<video_name>/shot_classification.json.
     """
+    if shot_type:
+        # Use the provided shot type (from upload selection)
+        import json
+        from pathlib import Path
+        folder = BASE_DIR / "output_data" / video_name
+        folder.mkdir(parents=True, exist_ok=True)
+
+        result = {
+            "video_name": video_name,
+            "shot_type": shot_type,
+            "predicted": shot_type,
+            "confidence": 1.0,
+            "threshold": 0.0,
+            "is_unknown": False,
+            "reason": "user_labeled",
+            "reason_label": "User-provided label from upload",
+            "model_name": "user_label",
+            "n_classes": 6,
+            "probabilities": {shot_type: 1.0},
+        }
+
+        with open(folder / "shot_classification.json", "w", encoding="utf-8") as fh:
+            json.dump(result, fh, indent=2)
+
+        print()
+        print("=" * 56)
+        print("SHOT CLASSIFICATION")
+        print("=" * 56)
+        print(f"Model      : user_label (from upload)")
+        print(f"Predicted  : {shot_type}")
+        print(f"Confidence : 1.000 (user-labeled)")
+        print(f"Final class: {shot_type}")
+        print(f"Reason     : User-provided label from upload")
+        return result
+
+    # Fallback to ML model if no shot_type provided
     try:
         result = ml_model.classify_video(video_name)
     except Exception as exc:                      # never break the pipeline
@@ -135,8 +171,8 @@ def main():
     # Fill the phase column of tracking_debug.csv now that phases exist.
     _annotate_tracking_debug(video_name)
 
-    # Model-based shot classification (Unknown when not confident).
-    classify_shot(video_name)
+    # Shot classification: use uploaded shot_type if provided, else ML model.
+    classify_shot(video_name, shot_type)
 
     provenance.write_provenance(BASE_DIR / "output_data" / video_name)
     provenance.write_report_header()
