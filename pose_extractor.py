@@ -736,12 +736,8 @@ class PoseExtractor:
     def select_batsman(self, per_frame, trajectories, total_frames):
         """Pick the single batsman identity and return per-frame poses +
         tracking confidence.
-
-        Returns (frames_data, best_traj, batsman_confidence) where frames_data
-        is one dict per frame with keys: pose, tracking_ok, confidence,
-        n_detected, selected_person_index, batsman_center,
-        identity_switch_detected, batsman_detected.
         """
+
         if not trajectories:
             return [{
                 "pose": None,
@@ -754,19 +750,118 @@ class PoseExtractor:
                 "batsman_detected": False,
             } for cands in per_frame], None, 0.0
 
+        # --------------------------------------------------------------
+        # Analyse every trajectory before selecting the batsman
+        # --------------------------------------------------------------
         best_traj = None
         best_score = -2.0
-        for traj in trajectories:
-            score = self._score_trajectory(traj, total_frames)
+        best_index = -1
+
+        print()
+        print("=" * 70)
+        print("              BATSMAN TRAJECTORY ANALYSIS")
+        print("=" * 70)
+        print(f"Total trajectories detected: {len(trajectories)}")
+        print(f"Total video frames: {total_frames}")
+        print("-" * 70)
+
+        for traj_idx, traj in enumerate(trajectories):
+
+            score = self._score_trajectory(
+                traj,
+                total_frames
+            )
+
+            coverage = (
+                len(traj.frames) /
+                max(total_frames, 1)
+            )
+
+            # Mean trajectory position
+            if traj.centers:
+                mean_x = (
+                    sum(c[0] for c in traj.centers) /
+                    len(traj.centers)
+                )
+                mean_y = (
+                    sum(c[1] for c in traj.centers) /
+                    len(traj.centers)
+                )
+            else:
+                mean_x = 0.0
+                mean_y = 0.0
+
+            # Average body height
+            heights = []
+
+            for bbox in traj.bboxes:
+                if bbox is not None:
+                    _, h = bbox_size(bbox)
+                    heights.append(h)
+
+            mean_height = (
+                sum(heights) / len(heights)
+                if heights else 0.0
+            )
+
+            # Batting stance score
+            stance_scores = []
+
+            for pose in traj.poses:
+                if pose is not None and len(pose) >= 28:
+                    stance_scores.append(
+                        _is_batsman_stance(pose)
+                    )
+
+            stance_score = (
+                sum(stance_scores) /
+                len(stance_scores)
+                if stance_scores else 0.0
+            )
+
+            print(
+                f"Trajectory {traj_idx:02d} | "
+                f"score={score:.3f} | "
+                f"frames={len(traj.frames):4d} | "
+                f"coverage={coverage:6.2%} | "
+                f"center=({mean_x:.3f}, {mean_y:.3f}) | "
+                f"height={mean_height:.3f} | "
+                f"stance={stance_score:.3f}"
+            )
+
             if score > best_score:
                 best_score = score
                 best_traj = traj
+                best_index = traj_idx
 
-        # Confidence check
-        batsman_confidence = max(0.0, min(1.0, best_score / 2.0))
-        batsman_detected = best_score >= BATSMAN_CONFIDENCE_THRESHOLD
+        print("-" * 70)
+        print(f"SELECTED TRAJECTORY: {best_index}")
+        print(f"SELECTED SCORE: {best_score:.3f}")
+        print("=" * 70)
+        print()
 
+        # --------------------------------------------------------------
+        # Confidence
+        # --------------------------------------------------------------
+        batsman_confidence = max(
+            0.0,
+            min(1.0, best_score / 2.0)
+        )
+
+        batsman_detected = (
+            best_score >= BATSMAN_CONFIDENCE_THRESHOLD
+        )
+
+        # --------------------------------------------------------------
+        # If confidence is too low, do not select anybody
+        # --------------------------------------------------------------
         if not batsman_detected:
+
+            print(
+                "WARNING: No trajectory reached the "
+                "batsman confidence threshold."
+            )
+
             return [{
                 "pose": None,
                 "tracking_ok": False,
@@ -778,53 +873,107 @@ class PoseExtractor:
                 "batsman_detected": False,
             } for cands in per_frame], None, batsman_confidence
 
-        # Stitch: absorb spatially-coincident fragments
-        best_traj = self._stitch_trajectory(best_traj, trajectories, per_frame)
+        # --------------------------------------------------------------
+        # Stitch spatially-coincident fragments
+        # --------------------------------------------------------------
+        best_traj = self._stitch_trajectory(
+            best_traj,
+            trajectories,
+            per_frame
+        )
 
-        # Re-build with strict spatial lock to prevent identity switches
-        best_traj = self._rebuild_batsman_trajectory(best_traj, per_frame)
+        # --------------------------------------------------------------
+        # Rebuild with strict spatial identity lock
+        # --------------------------------------------------------------
+        best_traj = self._rebuild_batsman_trajectory(
+            best_traj,
+            per_frame
+        )
 
-        # Track, for each frame, the candidate-list index of the pose that
-        # belongs to the locked trajectory (identified by closest center).
+        # --------------------------------------------------------------
+        # Map selected trajectory to candidate index
+        # --------------------------------------------------------------
         frame_to_cand_idx = {}
-        for frame, center in zip(best_traj.frames, best_traj.centers):
+
+        for frame, center in zip(
+            best_traj.frames,
+            best_traj.centers
+        ):
+
             cands = per_frame[frame]
+
             best_idx = None
-            best_d = 1e9
+            best_d = float("inf")
+
             for i, cand in enumerate(cands):
+
                 if cand.center is None:
                     continue
-                d = math.hypot(cand.center[0] - center[0],
-                               cand.center[1] - center[1])
+
+                d = math.hypot(
+                    cand.center[0] - center[0],
+                    cand.center[1] - center[1]
+                )
+
                 if d < best_d:
                     best_d = d
                     best_idx = i
+
             frame_to_cand_idx[frame] = best_idx
 
+        # --------------------------------------------------------------
+        # Frame -> pose lookup
+        # --------------------------------------------------------------
         by_frame = {}
+
         for idx, frame in enumerate(best_traj.frames):
             by_frame[frame] = best_traj.poses[idx]
 
+        # --------------------------------------------------------------
+        # Final per-frame output
+        # --------------------------------------------------------------
         output = []
         misses = 0
+
         for frame, cands in enumerate(per_frame):
+
             if frame in by_frame:
-                center = best_traj.centers[best_traj.frames.index(frame)]
+
+                traj_position = best_traj.frames.index(frame)
+
+                center = best_traj.centers[
+                    traj_position
+                ]
+
                 output.append({
                     "pose": by_frame[frame],
                     "tracking_ok": True,
                     "confidence": 1.0,
                     "n_detected": len(cands),
-                    "selected_person_index": frame_to_cand_idx.get(frame),
+                    "selected_person_index":
+                        frame_to_cand_idx.get(frame),
                     "batsman_center": center,
                     "identity_switch_detected": False,
                     "batsman_detected": True,
                 })
+
                 misses = 0
+
             else:
+
                 misses += 1
-                confidence = max(0.0, 1.0 - (misses / (MAX_GAP_FRAMES + 2.0)))
+
+                confidence = max(
+                    0.0,
+                    1.0 -
+                    (
+                        misses /
+                        (MAX_GAP_FRAMES + 2.0)
+                    )
+                )
+
                 switch = len(cands) > 0
+
                 output.append({
                     "pose": None,
                     "tracking_ok": False,
@@ -835,8 +984,22 @@ class PoseExtractor:
                     "identity_switch_detected": switch,
                     "batsman_detected": True,
                 })
-        return output, best_traj, batsman_confidence
 
+        print(
+            f"Final batsman trajectory frames: "
+            f"{len(best_traj.frames)}/{total_frames}"
+        )
+
+        print(
+            f"Final batsman confidence: "
+            f"{batsman_confidence:.3f}"
+        )
+
+        return (
+            output,
+            best_traj,
+            batsman_confidence
+        )
     # ------------------------------------------------------------------
     # Public API (single call that drives the whole video)
     # ------------------------------------------------------------------
