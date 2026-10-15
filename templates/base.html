@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="AI-Powered Cricket Batting Biomechanics Analysis — pose estimation, joint angle analysis, and ML-based shot classification.">
+    <meta name="theme-color" content="#060e17">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230b1824'/%3E%3Cpath d='M8 22 L16 8 L24 22' stroke='%234db8ff' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+    <title>{% block title %}CricBiomech AI{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<!-- Mobile sidebar overlay -->
+<div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+<!-- Mobile sidebar toggle -->
+<button class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle navigation">
+    <i class="fas fa-bars"></i>
+</button>
+
+<div class="app-layout">
+
+    <!-- ========== SIDEBAR ========== -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <a class="sidebar-brand" href="{{ url_for('index') }}">
+                <div class="sidebar-brand-icon">
+                    <i class="fas fa-microscope"></i>
+                </div>
+                <div class="sidebar-brand-text">
+                    <span class="brand-name">CricBiomech AI</span>
+                    <span class="brand-sub">Batting Biomechanics Analytics</span>
+                </div>
+            </a>
+        </div>
+
+        <nav class="sidebar-nav">
+            <div class="sidebar-section-label">Navigation</div>
+            <a class="sidebar-link" href="{{ url_for('index') }}" data-page="index">
+                <i class="fas fa-house"></i>
+                <span>Home</span>
+            </a>
+            <a class="sidebar-link" href="{{ url_for('dashboard') }}" data-page="dashboard">
+                <i class="fas fa-chart-line"></i>
+                <span>Dashboard</span>
+            </a>
+            <a class="sidebar-link" href="{{ url_for('upload_form') }}" data-page="upload">
+                <i class="fas fa-cloud-arrow-up"></i>
+                <span>Analyse Video</span>
+            </a>
+            <a class="sidebar-link" href="{{ url_for('history') }}" data-page="history">
+                <i class="fas fa-clock-rotate-left"></i>
+                <span>Analysis History</span>
+            </a>
+
+            <div class="sidebar-section-label">Platform</div>
+            <a class="sidebar-link" href="{{ url_for('dashboard') }}#reports" data-page="reports">
+                <i class="fas fa-file-lines"></i>
+                <span>Reports &amp; EDA</span>
+            </a>
+            <a class="sidebar-link" href="{{ url_for('dashboard') }}#ml" data-page="ml">
+                <i class="fas fa-brain"></i>
+                <span>ML Insights</span>
+            </a>
+        </nav>
+
+        <div class="sidebar-footer">
+            <i class="fas fa-flask" style="font-size:11px;"></i>
+            Dataset: {{ dataset_count }} videos
+        </div>
+    </aside>
+
+    <!-- ========== MAIN CONTENT ========== -->
+    <main class="main-content">
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="page-header" style="padding-bottom: 0;">
+                    {% for category, message in messages %}
+                        <div class="flash {{ category }}">
+                            {% if category == 'error' %}
+                                <i class="fas fa-circle-exclamation"></i>
+                            {% elif category == 'success' %}
+                                <i class="fas fa-circle-check"></i>
+                            {% else %}
+                                <i class="fas fa-circle-info"></i>
+                            {% endif %}
+                            {{ message }}
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+
+        <!-- ========== FOOTER ========== -->
+        <footer style="border-top: 1px solid var(--border-soft); padding: 20px 32px; margin-top: auto;">
+            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 0.8rem; color: var(--text-3);">
+                <div>
+                    <strong style="color: var(--text-2);">CricBiomech AI</strong> &mdash; BCA Research Project
+                </div>
+                <div>
+                    <i class="fas fa-database" style="font-size: 10px;"></i>
+                    {{ dataset_count }} videos &middot; AI-Powered Analysis
+                </div>
+            </div>
+        </footer>
+
+    </main>
+</div>
+
+<!-- Image Modal -->
+<div class="image-modal" id="imageModal">
+    <button class="image-modal-close" id="imageModalClose"><i class="fas fa-xmark"></i></button>
+    <img src="" alt="" id="imageModalImg">
+</div>
+
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

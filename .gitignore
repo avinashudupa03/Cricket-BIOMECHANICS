@@ -1,0 +1,40 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+env/
+.env
+
+# Raw input clips (large)
+input_videos/
+
+# Generated outputs & artifacts (reproducible, not tracked)
+models/
+output_data/
+output_videos/
+reports/
+
+# Generated analysis videos / annotated mp4s (large, reproducible)
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.analysis.mp4
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+
+# misc
+run_*.log
+*.log
+
+
+# nested duplicate copy - never track
+/Cricket-BIOMECHANICS-master/
+

@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Analysis History &mdash; CricBiomech AI{% endblock %}
+{% block content %}
+
+<!-- ================= PAGE HEADER ================= -->
+<div class="page-header">
+    <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap;">
+        <div>
+            <h1><i class="fas fa-clock-rotate-left" style="color:var(--accent); font-size:0.85em;"></i> Analysis History</h1>
+            <p class="subtitle">Every video analysed on this machine, newest first.</p>
+        </div>
+        <a class="btn btn-primary" href="{{ url_for('upload_form') }}">
+            <i class="fas fa-cloud-arrow-up"></i>
+            Analyse a Shot
+        </a>
+    </div>
+</div>
+
+<div class="page-body">
+
+    <div class="grid g3" style="margin-bottom:20px;">
+        <div class="stat-card" data-color="blue">
+            <div class="stat-icon ic-blue"><i class="fas fa-video"></i></div>
+            <div class="stat-value">{{ total }}</div>
+            <div class="stat-label">Total Analyses</div>
+            <div class="stat-footer">Processed video outputs on disk</div>
+        </div>
+        <div class="stat-card" data-color="amber">
+            <div class="stat-icon ic-amber"><i class="fas fa-star"></i></div>
+            <div class="stat-value">{{ rated_count }}</div>
+            <div class="stat-label">Rated Shots</div>
+            <div class="stat-footer">Clips with a 0-10 shot rating</div>
+        </div>
+        <div class="stat-card" data-color="green">
+            <div class="stat-icon ic-green"><i class="fas fa-table-list"></i></div>
+            <div class="stat-value">{{ videos | selectattr("analysis_exists") | list | length }}</div>
+            <div class="stat-label">With Annotated Video</div>
+            <div class="stat-footer">Playable analysis clips available</div>
+        </div>
+    </div>
+
+    {% if videos %}
+    <div class="card">
+        <div class="card-header">
+            <span class="card-icon ic-blue"><i class="fas fa-table-list"></i></span>
+            Previous Analyses
+            <span class="small faint" style="margin-left:auto;">Click a row to open the full result page.</span>
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Video</th>
+                        <th>Shot</th>
+                        <th>Rating</th>
+                        <th>Frames</th>
+                        <th>Processed</th>
+                        <th>Analysis Video</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for v in videos %}
+                    <tr>
+                        <td>
+                            <a class="video-row-name" href="{{ v['results_url'] }}" style="text-decoration:none;">
+                                {{ v["name"] }}
+                            </a>
+                        </td>
+                        <td>
+                            {% if v["shot_type"] %}
+                            <span class="badge b-{{ v['shot_type'] }}">{{ v["shot_type"] }}</span>
+                            {% else %}<span class="small faint">unknown</span>{% endif %}
+                        </td>
+                        <td>
+                            {% if v["rating"] is not none %}
+                            <span class="rating-chip r-{{ v['rating']|int }}" title="Shot rating (0-10)">{{ "%.1f"|format(v["rating"]) }} / 10</span>
+                            {% else %}<span class="small faint">&mdash;</span>{% endif %}
+                        </td>
+                        <td>{{ v["frames"] if v["frames"] is not none else "—" }}</td>
+                        <td class="small faint">{{ v["processed_at"] }}</td>
+                        <td>
+                            {% if v["analysis_exists"] %}
+                            <span class="badge" style="background:rgba(66,212,122,0.15); color:var(--green);"><i class="fas fa-circle-check"></i> Available</span>
+                            {% else %}
+                            <span class="small faint">&mdash;</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <a class="btn btn-ghost" href="{{ v['results_url'] }}">
+                                <i class="fas fa-arrow-right"></i> Open
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% else %}
+    <div class="card" style="text-align:center; padding:50px 20px; color:var(--text-3);">
+        <i class="fas fa-video" style="font-size:30px; margin-bottom:12px; display:block;"></i>
+        No analyses found yet.
+        <a href="{{ url_for('upload_form') }}">Upload a video</a> to get started.
+    </div>
+    {% endif %}
+
+</div>
+{% endblock %}

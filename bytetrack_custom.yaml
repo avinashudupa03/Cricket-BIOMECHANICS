@@ -1,0 +1,8 @@
+# Custom ByteTrack config for cricket - more persistent tracking
+tracker_type: bytetrack
+track_high_thresh: 0.15      # Even lower to keep more tracks
+track_low_thresh: 0.02       # Very low to recover low-confidence
+new_track_thresh: 0.15       # Less aggressive new track creation
+track_buffer: 100            # Much larger buffer for longer gaps
+match_thresh: 0.5            # Much more permissive matching
+fuse_score: True
