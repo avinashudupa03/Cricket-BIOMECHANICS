@@ -12,6 +12,7 @@ def main(argv=None):
         argv = sys.argv[1:]
 
     if len(argv) < 1:
+
         print("Usage:")
         print("python biomechanics_analyzer.py <video_name>")
         print()
@@ -23,14 +24,22 @@ def main(argv=None):
 
     folder = BASE_DIR / "output_data" / video_name
 
-    input_file = folder / "batting_phases.csv"
+    # Read phases from batting_phases.csv (has phase labels)
+    phases_file = folder / "batting_phases.csv"
+    # Read raw angles from batting_angles.csv (unsmoothed, original measurements)
+    angles_file = folder / "batting_angles.csv"
     output_file = folder / "biomechanics_features.csv"
 
-    if not input_file.exists():
-        print(f"ERROR: {input_file} not found.")
+    if not phases_file.exists():
+        print(f"ERROR: {phases_file} not found.")
         return
 
-    df = pd.read_csv(input_file)
+    if not angles_file.exists():
+        print(f"ERROR: {angles_file} not found.")
+        return
+
+    df = pd.read_csv(phases_file)
+    angles_df = pd.read_csv(angles_file)
 
     angle_columns = [
         "left_elbow_angle",
@@ -46,13 +55,13 @@ def main(argv=None):
     features = {}
 
     # -----------------------------------------
-    # Angle statistics
+    # Angle statistics (computed from raw angles)
     # -----------------------------------------
 
     for column in angle_columns:
 
         values = pd.to_numeric(
-            df[column],
+            angles_df[column],
             errors="coerce"
         ).dropna()
 
@@ -88,19 +97,24 @@ def main(argv=None):
             len(impact) // 2
         ]
 
-        features["impact_frame"] = (
-            impact_frame["frame"]
-        )
+        impact_frame_num = impact_frame["frame"]
 
-        features["impact_time_ms"] = (
-            impact_frame["timestamp_ms"]
-        )
+        features["impact_frame"] = impact_frame_num
+        features["impact_time_ms"] = impact_frame["timestamp_ms"]
 
-        for column in angle_columns:
-
-            features[
-                f"{column}_at_impact"
-            ] = impact_frame[column]
+        # Get raw angle values at impact frame from batting_angles.csv
+        # (not the smoothed versions from batting_phases.csv)
+        impact_angles_row = angles_df[angles_df["frame"] == impact_frame_num]
+        if len(impact_angles_row) == 1:
+            impact_angles_row = impact_angles_row.iloc[0]
+            for column in angle_columns:
+                features[
+                    f"{column}_at_impact"
+                ] = impact_angles_row[column]
+        else:
+            # Fallback: if frame not found in angles_df, use NaN
+            for column in angle_columns:
+                features[f"{column}_at_impact"] = np.nan
 
     # -----------------------------------------
     # Downswing information

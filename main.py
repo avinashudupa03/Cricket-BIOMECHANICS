@@ -3,7 +3,7 @@ import math
 import sys
 from pathlib import Path
 
-from pose_extractor import PoseExtractor
+from pose_extractor_yolo import YOLOGuidedPoseExtractor
 from landmark_extractor import LandmarkExtractor
 
 from config import POSE_STRIDE, FAST_MODE
@@ -182,6 +182,28 @@ def main():
 
     no_display = "--no-display" in sys.argv
     fast_mode = FAST_MODE or "--fast" in sys.argv
+    debug_video = "--debug-video" in sys.argv
+
+    # Parse --roi x1 y1 x2 y2 (normalized 0-1)
+    roi_override = None
+    if "--roi" in sys.argv:
+        try:
+            roi_idx = sys.argv.index("--roi")
+            roi_vals = sys.argv[roi_idx + 1:roi_idx + 5]
+            if len(roi_vals) == 4:
+                roi_override = {
+                    "x1": float(roi_vals[0]),
+                    "y1": float(roi_vals[1]),
+                    "x2": float(roi_vals[2]),
+                    "y2": float(roi_vals[3]),
+                }
+                print(f"[ROI OVERRIDE] Using custom ROI: {roi_override}")
+            else:
+                print("ERROR: --roi requires 4 values (x1 y1 x2 y2)")
+                sys.exit(1)
+        except (ValueError, IndexError):
+            print("ERROR: Invalid --roi values. Use: --roi x1 y1 x2 y2 (normalized 0-1)")
+            sys.exit(1)
 
     # -----------------------------------------
     # Get video path from command line
@@ -192,12 +214,14 @@ def main():
     if len(args) < 1:
 
         print("Usage:")
-        print("python main.py <video_path> [--no-display] [--fast]")
+        print("python main.py <video_path> [--no-display] [--fast] [--debug-video] [--roi x1 y1 x2 y2]")
         print()
         print("Example:")
         print("python main.py input_videos\\drive\\drive1.mp4")
         print("(add --no-display to skip the live OpenCV preview window)")
         print("(add --fast for faster processing with slightly reduced accuracy)")
+        print("(add --debug-video to generate debug visualization video)")
+        print("(add --roi x1 y1 x2 y2 to override batsman ROI, normalized 0-1)")
         return
 
     input_video = Path(args[0]).resolve()
@@ -206,6 +230,18 @@ def main():
 
         print(f"ERROR: Video not found: {input_video}")
         sys.exit(1)
+
+    # Apply ROI override if provided
+    if roi_override:
+        from config_yolo import BATSMAN_ROI
+        BATSMAN_ROI.update(roi_override)
+        # Also update the backwards-compatible constants
+        import config_yolo
+        config_yolo.BATSMAN_ROI_X1 = BATSMAN_ROI["x1"]
+        config_yolo.BATSMAN_ROI_Y1 = BATSMAN_ROI["y1"]
+        config_yolo.BATSMAN_ROI_X2 = BATSMAN_ROI["x2"]
+        config_yolo.BATSMAN_ROI_Y2 = BATSMAN_ROI["y2"]
+        print(f"[ROI] Updated to: x1={BATSMAN_ROI['x1']:.3f}, y1={BATSMAN_ROI['y1']:.3f}, x2={BATSMAN_ROI['x2']:.3f}, y2={BATSMAN_ROI['y2']:.3f}")
 
     # -----------------------------------------
     # MediaPipe model
@@ -269,7 +305,7 @@ def main():
     # Two-pass temporal tracking
     # -----------------------------------------
 
-    pose_extractor = PoseExtractor(
+    pose_extractor = YOLOGuidedPoseExtractor(
         model_path
     )
 
@@ -284,6 +320,8 @@ def main():
     print(f"FPS: {fps}")
     print(f"Total frames: {input_frames}")
     print(f"Pose stride: {POSE_STRIDE} (all frames are detected)")
+    if debug_video:
+        print(f"Debug video: ENABLED")
     print()
     print("Pass 1: detecting player poses on every frame (full frame + "
           "central band)...")
@@ -291,7 +329,8 @@ def main():
 
     frames_data, best_traj, batsman_confidence = pose_extractor.analyze(
         str(input_video),
-        fps=fps
+        fps=fps,
+        debug_video=debug_video
     )
 
     total_frames = len(frames_data)

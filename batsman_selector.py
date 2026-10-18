@@ -1,7 +1,7 @@
 """Batsman Selection Module
 
 Scores YOLO-tracked persons to identify the batsman using multiple evidence sources.
-Designed to be robust against wicketkeeper/non-striker confusion.
+Designed to be robust against wicketkeeper/non-striker confusion and YOLO track-ID changes.
 """
 
 import math
@@ -14,16 +14,17 @@ from config_yolo import (
     BATSMAN_LOCK_FRAMES, BATSMAN_SWITCH_THRESHOLD, BATSMAN_LOST_TOLERANCE,
     MIN_LOCK_FRAMES_BEFORE_SWITCH,
     POSITION_WEIGHT, SIZE_WEIGHT, POSE_WEIGHT, TEMPORAL_WEIGHT, MOVEMENT_WEIGHT,
+    CONTINUITY_WEIGHT,
     BATTING_REGION_CENTER, BATTING_REGION_SIGMA,
     MIN_BATSMAN_BBOX_HEIGHT, IDEAL_BATSMAN_BBOX_HEIGHT,
     WICKETKEEPER_Y_MIN, NON_STRIKER_X_MAX, NON_STRIKER_Y_MIN,
     BATSMAN_CONFIDENCE_THRESHOLD, MIN_SCORE_DIFFERENTIAL,
     MAX_RECOVERY_FRAMES, MIN_LOCK_FRAMES_BEFORE_SWITCH,
-    WICKETKEEPER_Y_MIN, NON_STRIKER_X_MAX, NON_STRIKER_Y_MIN,
-    POSITION_WEIGHT, SIZE_WEIGHT, POSE_WEIGHT, TEMPORAL_WEIGHT, MOVEMENT_WEIGHT,
-    BATTING_REGION_CENTER, BATTING_REGION_SIGMA,
-    MIN_BATSMAN_BBOX_HEIGHT, IDEAL_BATSMAN_BBOX_HEIGHT,
-    BATSMAN_CONFIDENCE_THRESHOLD, MIN_SCORE_DIFFERENTIAL,
+    BATSMAN_MAX_LOST_FRAMES,
+    CONTINUITY_SPATIAL_WEIGHT, CONTINUITY_IOU_WEIGHT, CONTINUITY_SIZE_WEIGHT,
+    CONTINUITY_ROI_POSITION_WEIGHT, CONTINUITY_MOVEMENT_WEIGHT,
+    MAX_CONTINUITY_DISPLACEMENT, MIN_CONTINUITY_IOU, MAX_SIZE_RATIO_DIFF,
+    BATSMAN_ROI, BATSMAN_ROI_MIN_OVERLAP,
 )
 
 import math
@@ -68,6 +69,63 @@ def clamp(value, min_val=0.0, max_val=1.0):
     return max(min_val, min(max_val, value))
 
 
+def roi_bbox() -> Tuple[float, float, float, float]:
+    """Return the batsman ROI as (x1, y1, x2, y2) in normalized coordinates."""
+    return (BATSMAN_ROI["x1"], BATSMAN_ROI["y1"], BATSMAN_ROI["x2"], BATSMAN_ROI["y2"])
+
+
+def bbox_roi_iou(bbox: Tuple[float, float, float, float], 
+                 roi: Tuple[float, float, float, float] = None) -> float:
+    """IoU of a bbox with the batsman ROI (both normalized 0-1)."""
+    if roi is None:
+        roi = roi_bbox()
+    return bbox_iou(bbox, roi)
+
+
+def bbox_roi_coverage(bbox: Tuple[float, float, float, float], 
+                      roi: Tuple[float, float, float, float] = None) -> float:
+    """Fraction of bbox that overlaps with ROI (intersection / bbox_area)."""
+    if roi is None:
+        roi = roi_bbox()
+    x1 = max(bbox[0], roi[0])
+    y1 = max(bbox[1], roi[1])
+    x2 = min(bbox[2], roi[2])
+    y2 = min(bbox[3], roi[3])
+    if x2 <= x1 or y2 <= y1:
+        return 0.0
+    inter = (x2 - x1) * (y2 - y1)
+    bbox_area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+    return inter / bbox_area
+
+
+def bbox_center_in_roi(bbox: Tuple[float, float, float, float], 
+                       roi: Tuple[float, float, float, float] = None) -> bool:
+    """Check if bbox center is inside ROI."""
+    if roi is None:
+        roi = roi_bbox()
+    cx = (bbox[0] + bbox[2]) / 2
+    cy = (bbox[1] + bbox[3]) / 2
+    return roi[0] <= cx <= roi[2] and roi[1] <= cy <= roi[3]
+
+
+def passes_roi_filter(bbox: Tuple[float, float, float, float], 
+                      min_overlap: float = BATSMAN_ROI_MIN_OVERLAP) -> bool:
+    """Check if a bbox (normalized) has sufficient overlap with the batsman ROI.
+    
+    Passes if:
+    - Box center is inside ROI, OR
+    - IoU with ROI >= min_overlap, OR  
+    - Coverage (intersection / box_area) >= min_overlap
+    """
+    if bbox_center_in_roi(bbox):
+        return True
+    if bbox_roi_iou(bbox) >= min_overlap:
+        return True
+    if bbox_roi_coverage(bbox) >= min_overlap:
+        return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Data Structures
 # ---------------------------------------------------------------------------
@@ -103,6 +161,7 @@ class PersonTrack:
     pose_score: float = 0.0
     temporal_score: float = 0.0
     movement_score: float = 0.0
+    continuity_score: float = 0.0
     total_score: float = 0.0
 
 
@@ -112,44 +171,89 @@ class BatsmanSelection:
     selected_track_id: Optional[int]
     confidence: float
     all_scores: Dict[int, float]
+    all_continuity_scores: Dict[int, float]
     reason: str
     frame: int
+    # Physical-person tracking info
+    physical_batsman_id: Optional[int] = None
+    track_id_changed: bool = False
+    batsman_lost: bool = False
+    recovery_active: bool = False
 
 
 # ---------------------------------------------------------------------------
-# Utility Functions
+# Continuity Scoring Functions
 # ---------------------------------------------------------------------------
 
-def gaussian_prior(center: Tuple[float, float], 
-                   mean: Tuple[float, float], 
-                   sigma: Tuple[float, float]) -> float:
-    """Gaussian position prior for batting region."""
-    if center is None:
-        return 0.0
-    x, y = center
-    mx, my = mean
-    sx, sy = sigma
-    dx = (x - mx) / max(sx, 1e-6)
-    dy = (y - my) / max(sy, 1e-6)
-    return math.exp(-0.5 * (dx * dx + dy * dy))
-
-
-def bbox_iou(box1, box2) -> float:
-    """IoU of two bboxes (x1, y1, x2, y2)."""
-    x1 = max(box1[0], box2[0])
-    y1 = max(box1[1], box2[1])
-    x2 = min(box1[2], box2[2])
-    y2 = min(box1[3], box2[3])
-    if x2 <= x1 or y2 <= y1:
-        return 0.0
-    inter = (x2 - x1) * (y2 - y1)
-    area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
-    area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
-    return inter / (area1 + area2 - inter)
-
-
-def clamp(value, min_val=0.0, max_val=1.0):
-    return max(min_val, min(max_val, value))
+def compute_continuity_score(candidate: PersonTrack, 
+                             prev_state: Optional[Dict]) -> float:
+    """
+    Compute physical-person continuity score independent of YOLO track ID.
+    
+    Args:
+        candidate: Current candidate track
+        prev_state: Previous batsman physical state (center, bbox, size, etc.)
+        
+    Returns:
+        Continuity score [0, 1] - higher = more likely same physical person
+    """
+    if prev_state is None:
+        return 0.5  # Neutral if no previous state
+    
+    score = 0.0
+    
+    # 1. Spatial continuity: distance from previous center
+    prev_center = prev_state.get('center')
+    if prev_center is not None and candidate.center is not None:
+        dist = math.hypot(candidate.center[0] - prev_center[0], 
+                         candidate.center[1] - prev_center[1])
+        # Gaussian decay with max displacement
+        spatial_score = math.exp(-0.5 * (dist / MAX_CONTINUITY_DISPLACEMENT) ** 2)
+        score += CONTINUITY_SPATIAL_WEIGHT * spatial_score
+    
+    # 2. IoU continuity: overlap with previous bbox
+    prev_bbox = prev_state.get('bbox')
+    if prev_bbox is not None and candidate.bbox is not None:
+        iou = bbox_iou(candidate.bbox, prev_bbox)
+        iou_score = clamp(iou / MIN_CONTINUITY_IOU) if iou > 0 else 0.0
+        score += CONTINUITY_IOU_WEIGHT * iou_score
+    
+    # 3. Size continuity: similarity in bbox height/width
+    if prev_state.get('bbox_height') is not None and candidate.bbox_height > 0:
+        size_ratio = candidate.bbox_height / max(prev_state['bbox_height'], 1e-6)
+        if 1.0 - MAX_SIZE_RATIO_DIFF <= size_ratio <= 1.0 + MAX_SIZE_RATIO_DIFF:
+            size_score = 1.0 - abs(1.0 - size_ratio) / MAX_SIZE_RATIO_DIFF
+        else:
+            size_score = 0.0
+        score += CONTINUITY_SIZE_WEIGHT * size_score
+    
+    # 4. ROI position: candidate's position within batting ROI
+    roi = roi_bbox()
+    if candidate.center is not None:
+        # Distance from ROI center
+        roi_cx = (roi[0] + roi[2]) / 2
+        roi_cy = (roi[1] + roi[3]) / 2
+        dist_from_roi_center = math.hypot(candidate.center[0] - roi_cx, 
+                                          candidate.center[1] - roi_cy)
+        roi_radius = math.hypot(roi[2] - roi[0], roi[3] - roi[1]) / 2
+        roi_score = max(0.0, 1.0 - dist_from_roi_center / roi_radius)
+        score += CONTINUITY_ROI_POSITION_WEIGHT * roi_score
+    
+    # 5. Movement consistency (from position history)
+    if len(candidate.position_history) >= 3:
+        steps = []
+        for i in range(1, len(candidate.position_history)):
+            p1 = candidate.position_history[i-1]
+            p2 = candidate.position_history[i]
+            steps.append(math.hypot(p2[0] - p1[0], p2[1] - p1[1]))
+        if len(steps) >= 2:
+            mean_step = np.mean(steps)
+            std_step = np.std(steps)
+            cv = std_step / max(mean_step, 1e-6)
+            movement_score = clamp(1.0 - min(cv, 1.0))
+            score += CONTINUITY_MOVEMENT_WEIGHT * movement_score
+    
+    return clamp(score)
 
 
 # ---------------------------------------------------------------------------
@@ -159,11 +263,26 @@ def clamp(value, min_val=0.0, max_val=1.0):
 class BatsmanSelector:
     """
     Selects the batsman from YOLO-tracked persons using multi-evidence scoring.
+    
+    Features:
+    - Track-ID independent physical-person tracking
+    - Spatial/temporal continuity across YOLO track-ID changes
+    - Configurable recovery window for YOLO dropouts
+    - Temporal hysteresis with continuity-aware switching
     """
     
     def __init__(self):
+        # YOLO track ID currently selected
         self.current_batsman_id: Optional[int] = None
         self.lock_frames: int = 0
+        
+        # Physical-person state (independent of YOLO track ID)
+        self.physical_batsman_id: int = 0  # Incrementing ID for physical person
+        self.prev_batsman_state: Optional[Dict] = None
+        self.batsman_lost_frames: int = 0
+        self.batsman_recovery_active: bool = False
+        
+        # Track history
         self.track_history: Dict[int, PersonTrack] = {}
         self.selection_history: List[BatsmanSelection] = []
         
@@ -185,11 +304,11 @@ class BatsmanSelector:
         # Update track history with new frame data
         self._update_tracks(tracks, frame_num, mediapipe_poses)
         
-        # Score all active tracks
-        scores = self._score_all_tracks()
+        # Score all active tracks with continuity
+        scores, continuity_scores = self._score_all_tracks()
         
-        # Select batsman with hysteresis
-        selection = self._select_with_hysteresis(scores, frame_num)
+        # Select batsman with continuity-aware hysteresis
+        selection = self._select_with_continuity(scores, continuity_scores, frame_num)
         
         self.selection_history.append(selection)
         return selection
@@ -233,17 +352,21 @@ class BatsmanSelector:
                     self._extract_pose_features(self.track_history[track_id], pose_data)
     
     def _extract_pose_features(self, track: PersonTrack, pose_data):
-        """Extract cricket-relevant pose features from MediaPipe landmarks - placeholder for now."""
-        # Pose data integration will be added later when integrating with MediaPipe pipeline
-        # For now, we rely on YOLO bbox and position features
+        """Extract cricket-relevant pose features from MediaPipe landmarks - placeholder."""
         pass
     
-    def _score_all_tracks(self) -> Dict[int, float]:
+    def _score_all_tracks(self) -> Tuple[Dict[int, float], Dict[int, float]]:
         """Score all active tracks."""
         scores = {}
+        continuity_scores = {}
+        
         for track_id, track in self.track_history.items():
+            # Only score currently detected tracks (frames_lost == 0)
+            # Tracks with frames_lost > 0 are not in the current frame
+            if track.frames_lost > 0:
+                continue
             if track.frames_lost > BATSMAN_LOST_TOLERANCE:
-                continue  # Skip lost tracks
+                continue
             
             # Position score: Gaussian prior around batting region
             track.position_score = gaussian_prior(
@@ -255,7 +378,7 @@ class BatsmanSelector:
             else:
                 track.size_score = 0.1  # Small penalty for too small
             
-            # Pose score: from MediaPipe features
+            # Pose score: from MediaPipe features (bbox geometry proxy)
             track.pose_score = self._compute_pose_score(track)
             
             # Temporal score: reward consistent presence
@@ -267,36 +390,31 @@ class BatsmanSelector:
             # Movement score: smooth, consistent movement
             track.movement_score = self._compute_movement_score(track)
             
-            # Weighted total
+            # Continuity score: physical-person tracking (track-ID independent)
+            track.continuity_score = compute_continuity_score(track, self.prev_batsman_state)
+            
+            # Weighted total (evidence + continuity)
             track.total_score = (
                 POSITION_WEIGHT * track.position_score +
                 SIZE_WEIGHT * track.size_score +
                 POSE_WEIGHT * track.pose_score +
                 TEMPORAL_WEIGHT * track.temporal_score +
-                MOVEMENT_WEIGHT * track.movement_score
+                MOVEMENT_WEIGHT * track.movement_score +
+                CONTINUITY_WEIGHT * track.continuity_score
             )
             
             scores[track_id] = track.total_score
+            continuity_scores[track_id] = track.continuity_score
         
-        return scores
+        return scores, continuity_scores
     
     def _compute_pose_score(self, track: PersonTrack) -> float:
-        """Compute pose-proxy score from bbox geometry (cricket-specific heuristics).
-        
-        Until MediaPipe integration, use bbox geometry as pose proxy:
-        - Batsman: tall bbox (full body), upright-ish, center-horizontal
-        - Wicketkeeper: crouched (wider, shorter), behind stumps (y > 0.55)
-        - Bowler: tall, at edge of frame
-        - Non-striker: at non-striker's end (x < 0.3), often crouched
-        """
-        # Base score from bbox geometry
+        """Compute pose-proxy score from bbox geometry (cricket-specific heuristics)."""
         score = 0.0
         
         # 1. Aspect ratio: batsmen are typically upright (tall, not too wide)
         if track.bbox_height > 0 and track.bbox_width > 0:
             aspect = track.bbox_height / track.bbox_width
-            # Batsman: tall and upright (aspect ~1.5-3.0)
-            # Wicketkeeper: crouched (aspect ~0.8-1.5)
             if aspect >= 1.8:
                 score += 0.3
             elif aspect >= 1.4:
@@ -307,7 +425,6 @@ class BatsmanSelector:
         # 2. Vertical position: batsman typically in upper-middle of frame
         if track.center is not None:
             cy = track.center[1]
-            # Batsman typically at y=0.3-0.5 (upper-middle)
             if 0.25 <= cy <= 0.55:
                 score += 0.25
             elif 0.20 <= cy <= 0.65:
@@ -315,25 +432,24 @@ class BatsmanSelector:
             elif 0.15 <= cy <= 0.75:
                 score += 0.05
             
-            # Wicketkeeper penalty: behind stumps, crouched (y > 0.55, low aspect)
+            # Wicketkeeper penalty
             if cy > WICKETKEEPER_Y_MIN:
                 if track.bbox_height > 0 and track.bbox_width > 0:
                     aspect = track.bbox_height / track.bbox_width
-                    if aspect < 1.6:  # Crouched posture
-                        score -= 0.3  # Strong penalty for wicketkeeper-like pose
+                    if aspect < 1.6:
+                        score -= 0.3
         
         # 3. Horizontal position: batsman typically center-right
         if track.center is not None:
             cx = track.center[0]
-            # Batsman typically at x=0.4-0.6
             if 0.35 <= cx <= 0.65:
                 score += 0.2
             elif 0.25 <= cx <= 0.75:
                 score += 0.1
             
-            # Non-striker penalty: at other end (x < 0.3), often crouched (y > 0.5)
+            # Non-striker penalty
             if cx < NON_STRIKER_X_MAX and track.center[1] > NON_STRIKER_Y_MIN:
-                score -= 0.25  # Penalty for non-striker-like position
+                score -= 0.25
         
         # 4. Size: batsman usually larger (closer to camera)
         if track.bbox_height >= MIN_BATSMAN_BBOX_HEIGHT:
@@ -345,9 +461,8 @@ class BatsmanSelector:
     def _compute_movement_score(self, track: PersonTrack) -> float:
         """Score based on movement consistency."""
         if len(track.position_history) < 3:
-            return 0.5  # Neutral for short history
+            return 0.5
         
-        # Check movement smoothness (low variance in step size)
         steps = []
         for i in range(1, len(track.position_history)):
             p1 = track.position_history[i-1]
@@ -358,90 +473,211 @@ class BatsmanSelector:
         if len(steps) < 2:
             return 0.5
         
-        # Low variance = consistent movement
         mean_step = np.mean(steps)
         std_step = np.std(steps)
-        cv = std_step / max(mean_step, 1e-6)  # Coefficient of variation
-        
-        # Lower CV = more consistent = higher score
+        cv = std_step / max(mean_step, 1e-6)
         return clamp(1.0 - min(cv, 1.0))
     
-    def _select_with_hysteresis(self, scores: Dict[int, float], frame_num: int) -> BatsmanSelection:
-        """Select batsman with temporal hysteresis to prevent flickering."""
+    def _select_with_continuity(self, 
+                                scores: Dict[int, float], 
+                                continuity_scores: Dict[int, float],
+                                frame_num: int) -> BatsmanSelection:
+        """Select batsman with continuity-aware hysteresis."""
         
         if not scores:
+            # No active tracks - check if we should maintain physical batsman state
+            self.batsman_lost_frames += 1
+            self.batsman_recovery_active = (self.batsman_lost_frames <= BATSMAN_MAX_LOST_FRAMES)
+            
             return BatsmanSelection(
                 selected_track_id=None,
                 confidence=0.0,
                 all_scores={},
+                all_continuity_scores={},
                 reason="no_active_tracks",
-                frame=frame_num
+                frame=frame_num,
+                physical_batsman_id=self.physical_batsman_id if self.batsman_recovery_active else None,
+                track_id_changed=False,
+                batsman_lost=not self.batsman_recovery_active,
+                recovery_active=self.batsman_recovery_active
             )
+        
+        # Reset lost frames counter
+        self.batsman_lost_frames = 0
+        self.batsman_recovery_active = False
         
         # Sort by score descending
         sorted_tracks = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         best_id, best_score = sorted_tracks[0]
         second_score = sorted_tracks[1][1] if len(sorted_tracks) > 1 else 0.0
+        best_continuity = continuity_scores.get(best_id, 0.0)
         
         # Check confidence threshold
         if best_score < BATSMAN_CONFIDENCE_THRESHOLD:
             if self.current_batsman_id is not None:
-                # Check if we should release lock
-                if self.lock_frames >= BATSMAN_LOCK_FRAMES:
-                    self.current_batsman_id = None
-                    self.lock_frames = 0
+                # Check if current track is still being detected
+                current_still_detected = self.current_batsman_id in scores
+                
+                if current_still_detected:
+                    # Current track still detected but score low - maintain lock with hysteresis
+                    if self.lock_frames >= BATSMAN_LOCK_FRAMES:
+                        self.current_batsman_id = None
+                        self.lock_frames = 0
+                        self.batsman_recovery_active = True
+                        self.batsman_lost_frames = 0
+                        return BatsmanSelection(
+                            selected_track_id=None,
+                            confidence=best_score,
+                            all_scores=scores,
+                            all_continuity_scores=continuity_scores,
+                            reason="best_score_below_threshold_lock_released",
+                            frame=frame_num,
+                            physical_batsman_id=self.physical_batsman_id,
+                            track_id_changed=False,
+                            batsman_lost=False,
+                            recovery_active=True
+                        )
                     return BatsmanSelection(
-                        selected_track_id=None,
+                        selected_track_id=self.current_batsman_id,
                         confidence=best_score,
                         all_scores=scores,
-                        reason="best_score_below_threshold_lock_released",
-                        frame=frame_num
+                        all_continuity_scores=continuity_scores,
+                        reason="below_threshold_maintaining_lock",
+                        frame=frame_num,
+                        physical_batsman_id=self.physical_batsman_id,
+                        track_id_changed=False,
+                        batsman_lost=False,
+                        recovery_active=self.batsman_recovery_active
                     )
+                else:
+                    # Current track LOST - don't maintain lock on ghost track
+                    # Allow selection of best available track (even if below threshold)
+                    # or enter recovery mode if all scores are very low
+                    self.current_batsman_id = None
+                    self.lock_frames = 0
+                    self.batsman_recovery_active = True
+                    self.batsman_lost_frames = 0
+                    
+                    # If we have any tracks, select the best one (even below threshold)
+                    # but mark as recovery mode
+                    if scores:
+                        return BatsmanSelection(
+                            selected_track_id=best_id,
+                            confidence=best_score,
+                            all_scores=scores,
+                            all_continuity_scores=continuity_scores,
+                            reason="track_lost_recovering_best_available",
+                            frame=frame_num,
+                            physical_batsman_id=self.physical_batsman_id,
+                            track_id_changed=True,
+                            batsman_lost=False,
+                            recovery_active=True
+                        )
+                    else:
+                        return BatsmanSelection(
+                            selected_track_id=None,
+                            confidence=best_score,
+                            all_scores=scores,
+                            all_continuity_scores=continuity_scores,
+                            reason="track_lost_no_candidates",
+                            frame=frame_num,
+                            physical_batsman_id=self.physical_batsman_id,
+                            track_id_changed=False,
+                            batsman_lost=True,
+                            recovery_active=True
+                        )
+            
             return BatsmanSelection(
-                selected_track_id=self.current_batsman_id,
+                selected_track_id=None,
                 confidence=best_score,
                 all_scores=scores,
-                reason="below_threshold_maintaining_lock",
-                frame=frame_num
+                all_continuity_scores=continuity_scores,
+                reason="below_threshold_no_current_track",
+                frame=frame_num,
+                physical_batsman_id=None,
+                track_id_changed=False,
+                batsman_lost=True,
+                recovery_active=False
             )
         
         # Check if current batsman is still viable
+        track_id_changed = False
         if self.current_batsman_id is not None:
             current_score = scores.get(self.current_batsman_id, 0.0)
+            current_continuity = continuity_scores.get(self.current_batsman_id, 0.0)
             score_ratio = best_score / max(current_score, 1e-6)
             
-            # If current batsman is close to best, keep lock
-            if score_ratio < BATSMAN_SWITCH_THRESHOLD:
+            # Also consider continuity of current batsman
+            current_is_viable = (score_ratio < BATSMAN_SWITCH_THRESHOLD or 
+                                current_continuity > 0.6)  # High continuity overrides score ratio
+            
+            if current_is_viable:
                 self.lock_frames = min(self.lock_frames + 1, BATSMAN_LOCK_FRAMES)
                 return BatsmanSelection(
                     selected_track_id=self.current_batsman_id,
                     confidence=current_score,
                     all_scores=scores,
+                    all_continuity_scores=continuity_scores,
                     reason="maintaining_lock_hysteresis",
-                    frame=frame_num
+                    frame=frame_num,
+                    physical_batsman_id=self.physical_batsman_id,
+                    track_id_changed=False,
+                    batsman_lost=False,
+                    recovery_active=False
                 )
             else:
                 # Significant difference - allow switch ONLY if minimum lock duration met
                 if self.lock_frames >= MIN_LOCK_FRAMES_BEFORE_SWITCH:
                     self.lock_frames = 0
+                    track_id_changed = (best_id != self.current_batsman_id)
                 else:
-                    # Not enough lock time yet, maintain current selection
                     self.lock_frames = min(self.lock_frames + 1, BATSMAN_LOCK_FRAMES)
                     return BatsmanSelection(
                         selected_track_id=self.current_batsman_id,
                         confidence=current_score,
                         all_scores=scores,
+                        all_continuity_scores=continuity_scores,
                         reason="maintaining_lock_min_duration",
-                        frame=frame_num
+                        frame=frame_num,
+                        physical_batsman_id=self.physical_batsman_id,
+                        track_id_changed=False,
+                        batsman_lost=False,
+                        recovery_active=False
                     )
         
         # New selection or forced switch
         if best_id != self.current_batsman_id:
             self.lock_frames = 1
+            track_id_changed = True
+            
+            # Check if this is a physical person continuation (high continuity)
+            if self.prev_batsman_state is not None:
+                best_continuity = continuity_scores.get(best_id, 0.0)
+                if best_continuity > 0.75:
+                    # Same physical person, different track ID - don't increment physical ID
+                    track_id_changed = False  # It's a track ID change, not person change
+                else:
+                    # New physical person
+                    self.physical_batsman_id += 1
+            else:
+                # First selection - don't count as a switch
+                self.physical_batsman_id = 1
+                track_id_changed = False
         else:
             self.lock_frames = min(self.lock_frames + 1, BATSMAN_LOCK_FRAMES)
         
         self.current_batsman_id = best_id
+        
+        # Update physical batsman state
+        best_track = self.track_history.get(best_id)
+        if best_track:
+            self.prev_batsman_state = {
+                'center': best_track.center,
+                'bbox': best_track.bbox,
+                'bbox_height': best_track.bbox_height,
+                'bbox_width': best_track.bbox_width,
+                'frame': frame_num,
+            }
         
         # Check score differential
         score_diff = best_score - second_score
@@ -450,12 +686,23 @@ class BatsmanSelector:
         else:
             reason = "selected_best_score"
         
+        if track_id_changed:
+            if self.prev_batsman_state and continuity_scores.get(best_id, 0.0) > 0.75:
+                reason = "track_id_changed_same_batsman"
+            else:
+                reason = "physical_person_switched"
+        
         return BatsmanSelection(
             selected_track_id=best_id,
             confidence=best_score,
             all_scores=scores,
+            all_continuity_scores=continuity_scores,
             reason=reason,
-            frame=frame_num
+            frame=frame_num,
+            physical_batsman_id=self.physical_batsman_id,
+            track_id_changed=track_id_changed,
+            batsman_lost=False,
+            recovery_active=False
         )
 
 

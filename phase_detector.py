@@ -6,14 +6,16 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 
 
-def smooth(series, window=5):
+def smooth(series, window=5, max_gap=5):
 
     series = pd.to_numeric(
         series,
         errors="coerce"
     )
 
+    # Only interpolate short gaps (max_gap frames)
     series = series.interpolate(
+        limit=max_gap,
         limit_direction="both"
     )
 
@@ -22,6 +24,15 @@ def smooth(series, window=5):
         center=True,
         min_periods=1
     ).mean()
+
+
+def _smoothed_column(series, window=5, max_gap=5):
+    """Return a smoothed version of the series with limited interpolation.
+    
+    This is used for creating smoothed columns for phase detection without
+    modifying the original angle measurements.
+    """
+    return smooth(series, window=window, max_gap=max_gap)
 
 
 def main(argv=None):
@@ -76,14 +87,20 @@ def main(argv=None):
         knee
     )
 
+    # Create smoothed versions of angle columns for movement calculation and phase detection.
+    # Original angle columns are preserved with their original NaN values for biomechanics analysis.
     for column in all_angles:
+        smooth_col = f"{column}_smooth"
+        df[smooth_col] = _smoothed_column(df[column])
 
-        df[column] = smooth(
-            df[column]
-        )
+    # Use smoothed columns for movement calculation
+    smooth_elbow = [f"{c}_smooth" for c in elbow]
+    smooth_shoulder = [f"{c}_smooth" for c in shoulder]
+    smooth_hip = [f"{c}_smooth" for c in hip]
+    smooth_knee = [f"{c}_smooth" for c in knee]
 
     df["elbow_movement"] = (
-        df[elbow]
+        df[smooth_elbow]
         .diff()
         .abs()
         .mean(axis=1)
@@ -91,7 +108,7 @@ def main(argv=None):
     )
 
     df["shoulder_movement"] = (
-        df[shoulder]
+        df[smooth_shoulder]
         .diff()
         .abs()
         .mean(axis=1)
@@ -99,7 +116,7 @@ def main(argv=None):
     )
 
     df["hip_movement"] = (
-        df[hip]
+        df[smooth_hip]
         .diff()
         .abs()
         .mean(axis=1)
@@ -107,7 +124,7 @@ def main(argv=None):
     )
 
     df["knee_movement"] = (
-        df[knee]
+        df[smooth_knee]
         .diff()
         .abs()
         .mean(axis=1)

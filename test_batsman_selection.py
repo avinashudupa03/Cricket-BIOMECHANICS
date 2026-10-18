@@ -10,7 +10,8 @@ from ultralytics import YOLO
 from batsman_selector import (
     BatsmanSelector, PersonTrack, create_person_track_from_yolo,
     BATSMAN_LOCK_FRAMES, BATSMAN_SWITCH_THRESHOLD, BATSMAN_LOST_TOLERANCE,
-    POSITION_WEIGHT, SIZE_WEIGHT, POSE_WEIGHT, TEMPORAL_WEIGHT, MOVEMENT_WEIGHT
+    POSITION_WEIGHT, SIZE_WEIGHT, POSE_WEIGHT, TEMPORAL_WEIGHT, MOVEMENT_WEIGHT,
+    BATSMAN_ROI,
 )
 
 # Color generation for track IDs
@@ -26,7 +27,8 @@ def test_batsman_selection(video_path, output_path=None, csv_path=None, conf_thr
     """Run YOLO tracking + batsman selection on a video."""
     
     print(f"Loading YOLO model...")
-    model = YOLO('yolo11n.pt')
+    from config_yolo import YOLO_MODEL_NAME
+    model = YOLO(YOLO_MODEL_NAME)
     
     print(f"Initializing Batsman Selector...")
     selector = BatsmanSelector()
@@ -82,11 +84,12 @@ def test_batsman_selection(video_path, output_path=None, csv_path=None, conf_thr
         frame_count += 1
         
         # Run YOLO tracking with ByteTrack
+        from config_yolo import YOLO_TRACKER_CONFIG, YOLO_PERSON_CLASS
         results = model.track(
             frame, 
             conf=conf_threshold, 
-            classes=[person_class_id], 
-            tracker="bytetrack_custom.yaml",
+            classes=[YOLO_PERSON_CLASS], 
+            tracker=YOLO_TRACKER_CONFIG,
             persist=True,
             verbose=False
         )
@@ -119,6 +122,15 @@ def test_batsman_selection(video_path, output_path=None, csv_path=None, conf_thr
         
         # Run batsman selection
         selection = selector.update(tracks, frame_count)
+        
+        # Draw Batsman ROI rectangle
+        roi_x1 = int(BATSMAN_ROI["x1"] * width)
+        roi_y1 = int(BATSMAN_ROI["y1"] * height)
+        roi_x2 = int(BATSMAN_ROI["x2"] * width)
+        roi_y2 = int(BATSMAN_ROI["y2"] * height)
+        cv2.rectangle(frame, (roi_x1, roi_y1), (roi_x2, roi_y2), (0, 255, 255), 2)  # Yellow ROI box
+        cv2.putText(frame, "BATSMAN ROI", (roi_x1, roi_y1 - 10),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
         
         # Draw all tracks
         if detections is not None and detections.id is not None:
@@ -299,10 +311,55 @@ def test_batsman_selection(video_path, output_path=None, csv_path=None, conf_thr
     if csv_path:
         print(f"Selection CSV saved to: {csv_path}")
 
+def parse_roi_override():
+    """Parse --roi x1 y1 x2 x2 from command line."""
+    if "--roi" in sys.argv:
+        try:
+            roi_idx = sys.argv.index("--roi")
+            roi_vals = sys.argv[roi_idx + 1:roi_idx + 5]
+            if len(roi_vals) == 4:
+                return {
+                    "x1": float(roi_vals[0]),
+                    "y1": float(roi_vals[1]),
+                    "x2": float(roi_vals[2]),
+                    "y2": float(roi_vals[3]),
+                }
+            else:
+                print("ERROR: --roi requires 4 values (x1 y1 x2 y2)")
+                sys.exit(1)
+        except (ValueError, IndexError):
+            print("ERROR: Invalid --roi values. Use: --roi x1 y1 x2 y2 (normalized 0-1)")
+            sys.exit(1)
+    return None
+
 if __name__ == "__main__":
-    video_path = Path("input_videos/defence/fast_left_0000036.avi")
-    output_path = Path("output_videos/defence_batsman_selection_test.mp4")
-    csv_path = Path("output_videos/defence_batsman_selection_log.csv")
+    # Parse --roi override
+    roi_override = parse_roi_override()
+    if roi_override:
+        BATSMAN_ROI.update(roi_override)
+        # Also update the backwards-compatible constants in config_yolo
+        import config_yolo
+        config_yolo.BATSMAN_ROI_X1 = BATSMAN_ROI["x1"]
+        config_yolo.BATSMAN_ROI_Y1 = BATSMAN_ROI["y1"]
+        config_yolo.BATSMAN_ROI_X2 = BATSMAN_ROI["x2"]
+        config_yolo.BATSMAN_ROI_Y2 = BATSMAN_ROI["y2"]
+        print(f"[ROI OVERRIDE] Using custom ROI: {BATSMAN_ROI}")
+    
+    # Parse video path from command line (non-flag args)
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    
+    if len(args) < 1:
+        print("Usage:")
+        print("python test_batsman_selection.py <video_path> [--roi x1 y1 x2 y2]")
+        print("Example:")
+        print("python test_batsman_selection.py input_videos/defence/fast_left_0000036.avi")
+        print("python test_batsman_selection.py input_videos/defence/fast_left_0000045.avi --roi 0.3 0.15 0.7 0.75")
+        sys.exit(1)
+    
+    video_path = Path(args[0])
+    video_name = video_path.stem
+    output_path = Path(f"output_videos/{video_name}_batsman_selection_test.mp4")
+    csv_path = Path(f"output_videos/{video_name}_batsman_selection_log.csv")
     
     if not video_path.exists():
         print(f"ERROR: Video not found: {video_path}")
