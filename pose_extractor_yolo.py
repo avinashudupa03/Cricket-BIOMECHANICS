@@ -197,46 +197,26 @@ class YOLOGuidedPoseExtractor:
         cv2.putText(frame, "YOLO CROP", (crop_x1, crop_y1 - 10),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
         
-        # Draw YOLO tracks
+        # Draw ONLY the selected batsman's bounding box.
         for track in yolo_tracks:
+            if track.track_id != selection.selected_track_id:
+                continue
+
             x1, y1, x2, y2 = map(int, track.bbox)
             track_id = track.track_id
-            conf = track.confidence
-            center_x = (x1 + x2) // 2
-            center_y = (y1 + y2) // 2
-            
-            # Color based on track ID (consistent colors)
-            color = self._get_track_color(track_id)
-            is_batsman = (track_id == selection.selected_track_id)
-            
-            # Draw bounding box
-            thickness = 4 if is_batsman else 2
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
-            
-            # Get score
-            track_score = selection.all_scores.get(track_id, 0.0)
-            track_continuity = selection.all_continuity_scores.get(track_id, 0.0)
-            
-            # Draw track ID, score, and continuity
-            label = f"ID:{track_id} S:{track_score:.2f} C:{track_continuity:.2f}"
-            if is_batsman:
-                label = "★ " + label + " ★"
-            
-            cv2.putText(frame, label, (x1, y1 - 10),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-            
-            # Draw center point
-            cv2.circle(frame, (center_x, center_y), 4, color, -1)
-        
-        # Draw info panel at top
-        panel_h = 140
-        cv2.rectangle(frame, (0, 0), (w, panel_h), (10, 10, 20), -1)
-        cv2.line(frame, (0, panel_h), (w, panel_h), (40, 44, 60), 1)
-        
-        # Title
-        cv2.putText(frame, f"YOLO+Batsman ROI Debug | Frame: {frame_num}/{total_frames}", (16, 26),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        
+            color = (0, 255, 0)
+
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
+            cv2.putText(
+                frame,
+                f"BATSMAN ID: {track_id}",
+                (x1, max(20, y1 - 10)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                color,
+                2
+            )
+
         # Selected batsman info
         if selection.selected_track_id is not None:
             sel_color = self._get_track_color(selection.selected_track_id)

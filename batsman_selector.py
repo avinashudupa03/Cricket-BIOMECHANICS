@@ -512,6 +512,23 @@ class BatsmanSelector:
         second_score = sorted_tracks[1][1] if len(sorted_tracks) > 1 else 0.0
         best_continuity = continuity_scores.get(best_id, 0.0)
         
+        # Safety guard: never replace a lost batsman with another person.
+        if self.current_batsman_id is not None and self.current_batsman_id not in scores:
+            self.batsman_lost_frames += 1
+            self.batsman_recovery_active = True
+            return BatsmanSelection(
+                selected_track_id=None,
+                confidence=0.0,
+                all_scores=scores,
+                all_continuity_scores=continuity_scores,
+                reason="locked_batsman_track_missing_no_fallback",
+                frame=frame_num,
+                physical_batsman_id=self.physical_batsman_id,
+                track_id_changed=False,
+                batsman_lost=True,
+                recovery_active=True
+            )
+
         # Check confidence threshold
         if best_score < BATSMAN_CONFIDENCE_THRESHOLD:
             if self.current_batsman_id is not None:

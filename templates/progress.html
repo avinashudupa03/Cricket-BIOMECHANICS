@@ -34,36 +34,24 @@
             <i class="fas fa-spinner fa-spin"></i> Queueing the pipeline…
         </p>
 
-        <ul id="jobStepList" class="job-steps" style="margin-top: 18px; padding: 0; list-style: none;">
-            <li class="job-step pending" data-step="upload">
-                <i class="fas fa-circle-check job-step-icon"></i>
-                <span>Uploaded &amp; saved the video</span>
-            </li>
-            <li class="job-step pending" data-step="pose">
-                <i class="fas fa-circle-check job-step-icon"></i>
-                <span>Detecting player pose &amp; landmarks</span>
-            </li>
-            <li class="job-step pending" data-step="angles">
-                <i class="fas fa-circle-check job-step-icon"></i>
-                <span>Calculating joint angles</span>
-            </li>
-            <li class="job-step pending" data-step="phases">
-                <i class="fas fa-circle-check job-step-icon"></i>
-                <span>Detecting batting phases</span>
-            </li>
-            <li class="job-step pending" data-step="features">
-                <i class="fas fa-circle-check job-step-icon"></i>
-                <span>Extracting biomechanics features</span>
-            </li>
-            <li class="job-step pending" data-step="rating">
-                <i class="fas fa-circle-check job-step-icon"></i>
-                <span>Rating the shot (0–10)</span>
-            </li>
-            <li class="job-step pending" data-step="video">
-                <i class="fas fa-circle-check job-step-icon"></i>
-                <span>Rendering annotated video</span>
-            </li>
-        </ul>
+<ul id="jobStepList" class="job-steps" style="margin-top: 18px; padding: 0; list-style: none;">
+    <li class="job-step pending" data-step="upload">
+        <i class="fas fa-circle-check job-step-icon"></i>
+        <span>Video uploaded and saved</span>
+    </li>
+    <li class="job-step pending" data-step="pose">
+        <i class="fas fa-circle-check job-step-icon"></i>
+        <span>Detecting player pose and extracting landmarks</span>
+    </li>
+    <li class="job-step pending" data-step="analysis">
+        <i class="fas fa-circle-check job-step-icon"></i>
+        <span>Calculating angles, batting phases, features and ratings</span>
+    </li>
+    <li class="job-step pending" data-step="video">
+        <i class="fas fa-circle-check job-step-icon"></i>
+        <span>Rendering annotated video</span>
+    </li>
+</ul>
 
         <div class="note error hidden" id="jobError" style="margin-top: 16px;">
             <i class="fas fa-circle-exclamation"></i>
@@ -83,83 +71,144 @@
 <script>
 (function () {
     var jobId = {{ job_id|tojson }};
-    var doneUrl = {{ (url_for('results', video_name='__NAME__'))|tojson }};
+    var videoName = {{ video_name|tojson }};
+    var doneUrl = {{ url_for('results_page', video_name='__NAME__')|tojson }};
+
     var errorBox = document.getElementById("jobError");
     var errorText = document.getElementById("jobErrorText");
     var statusTitle = document.getElementById("statusTitle");
     var statusSub = document.getElementById("statusSub");
     var fill = document.getElementById("jobProgressFill");
-    var steps = Array.prototype.slice.call(document.querySelectorAll(".job-step"));
+    var progressBar = document.getElementById("jobProgressBar");
+    var steps = Array.from(document.querySelectorAll(".job-step"));
 
-    // Map live step labels (from the server) back to the static step list.
-    var stepMap = [
-        ["Detecting player pose", "pose"],
-        ["Calculating joint angles", "angles"],
-        ["Detecting batting phases", "phases"],
-        ["Extracting biomechanics features", "features"],
-        ["Rating the shot", "rating"],
-        ["Rendering annotated video", "video"]
-    ];
+   var stageMap = [
+    ["Uploaded video", "upload"],
+    ["Detecting player pose and extracting landmarks", "pose"],
+    ["Calculating joint angles, batting phases, features and ratings", "analysis"],
+    ["Rendering annotated video", "video"]
+];
 
-    function setStep(ord) {
-        steps.forEach(function (el, i) {
-            el.className = "job-step " + (i < ord ? "done" : (i === ord ? "active" : "pending"));
+    function renderSteps(status) {
+        var completed = new Set();
+
+        (status.steps || []).forEach(function (label) {
+            stageMap.forEach(function (pair) {
+                if (label.indexOf(pair[0]) !== -1) {
+                    completed.add(pair[1]);
+                }
+            });
         });
-        if (ord >= steps.length - 1) { fill.style.width = "95%"; }
+
+        var current = status.current || "";
+
+        var active = null;
+        if (current.indexOf("Detecting player pose") !== -1) {
+            active = "pose";
+        } else if (current.indexOf("Calculating joint angles") !== -1) {
+            active = "analysis";
+        } else if (current.indexOf("Rendering annotated video") !== -1) {
+            active = "video";
+        }
+
+        steps.forEach(function (el) {
+            var id = el.dataset.step;
+            var state = completed.has(id) ? "done" : "pending";
+
+            if (!completed.has(id) && id === active) {
+                state = "active";
+            }
+
+            el.className = "job-step " + state;
+        });
+
+        var percentages = {
+            upload: 10,
+            pose: 30,
+            analysis: 60,
+            video: 90
+        };
+
+        var currentStep = active
+    ? percentages[active]
+    : (completed.has("upload") ? 10 : 0);
+
+fill.style.width = currentStep + "%";
+        fill.classList.remove("indeterminate");
     }
 
     function fail(message) {
         statusTitle.textContent = "Analysis failed";
-        statusSub.innerHTML = '<i class="fas fa-triangle-exclamation"></i> The pipeline could not finish this clip.';
-        errorText.textContent = message || "Check the server console for details, then try another video.";
+        statusSub.textContent = "The pipeline could not finish this video.";
+        errorText.textContent =
+            message || "Check the server console for details.";
         errorBox.classList.remove("hidden");
         fill.style.width = "100%";
-        document.getElementById("jobProgressBar").classList.add("error");
+        progressBar.classList.add("error");
     }
 
     function finish(name) {
-        if (!name) { name = {{ video_name|tojson }}; }
-        statusTitle.textContent = "Analysis complete — opening results…";
-        statusSub.innerHTML = '<i class="fas fa-check-circle"></i> Redirecting…';
-        setStep(steps.length - 1);
+        statusTitle.textContent = "Analysis complete";
+        statusSub.textContent = "Opening your results...";
+        steps.forEach(function (el) {
+            el.className = "job-step done";
+        });
         fill.style.width = "100%";
-        window.location.href = doneUrl.replace("__NAME__", encodeURIComponent(name));
+
+        var targetName = name || videoName;
+        window.location.replace(
+            doneUrl.replace("__NAME__", encodeURIComponent(targetName))
+        );
     }
 
     function poll() {
-        fetch("/progress_status/" + jobId, { cache: "no-store" })
-            .then(function (r) { return r.json(); })
-            .then(function (status) {
-                if (status.state === "missing") {
-                    fail("The job record was not found.");
-                    return;
-                }
-                (status.steps || []).forEach(function (label) {
-                    stepMap.forEach(function (pair) {
-                        if (label.indexOf(pair[0]) !== -1) {
-                            var target = steps.findIndex(function (el) { return el.dataset.step === pair[1]; });
-                            if (target >= 0) { setStep(target); }
-                        }
-                    });
+        fetch("/progress_status/" + encodeURIComponent(jobId), {
+            cache: "no-store"
+        })
+        .then(function (response) {
+            if (!response.ok) {
+                return response.json().then(function (status) {
+                    if (status.state === "missing") {
+                        return status;
+                    }
+                    throw new Error("Could not retrieve analysis status.");
                 });
-                if (status.current && status.current !== "Starting…" && status.current !== "Queued…") {
-                    statusTitle.textContent = status.current;
-                    statusSub.innerHTML = '<i class="fas fa-spinner fa-spin"></i> ' + status.current;
+            }
+            return response.json();
+        })
+        .then(function (status) {
+            if (status.state === "missing") {
+                fail("The analysis job was not found in the database.");
+                return;
+            }
+
+            renderSteps(status);
+
+            if (status.state === "done") {
+                if (status.ok) {
+                    finish(status.video_name);
+                } else {
+                    fail(status.error);
                 }
-                if (status.state === "done") {
-                    if (status.ok) { finish(status.video_name); }
-                    else { fail(status.error); }
-                    return;
-                }
-                setTimeout(poll, 1500);
-            })
-            .catch(function () { setTimeout(poll, 2500); });
+                return;
+            }
+
+            statusTitle.textContent = status.current || "Starting analysis";
+            statusSub.textContent = "The analysis is running. Please wait.";
+
+            setTimeout(poll, 1500);
+        })
+        .catch(function (error) {
+            statusSub.textContent =
+                error.message + " Retrying shortly...";
+            setTimeout(poll, 2500);
+        });
     }
 
-    setStep(0);
     poll();
 })();
 </script>
+
 <style>
     .job-steps { margin: 0; }
     .job-step { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border-soft, #14202c); font-size: 0.85rem; color: var(--text-3, #8ba1b5); }

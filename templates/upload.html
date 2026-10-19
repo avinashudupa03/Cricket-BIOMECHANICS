@@ -1,10 +1,16 @@
+
 {% extends "base.html" %}
 {% block title %}Analyse Video &mdash; CricBiomech AI{% endblock %}
 {% block content %}
 
 <div class="page-header">
-    <h1><i class="fas fa-cloud-arrow-up" style="color:var(--accent); font-size:0.85em;"></i> Analyse a Batting Video</h1>
-    <p class="subtitle">Upload a cricket batting clip, select the shot type, and receive a full biomechanics analysis.</p>
+    <h1>
+        <i class="fas fa-cloud-arrow-up" style="color:var(--accent);font-size:0.85em;"></i>
+        Analyse a Batting Video
+    </h1>
+    <p class="subtitle">
+        Upload a cricket batting clip, select the shot type, and receive a full biomechanics analysis.
+    </p>
 </div>
 
 <div class="page-body">
@@ -13,33 +19,57 @@
         'defence': {'icon': 'fa-shield-halved', 'desc': 'Defensive block'},
         'drive':   {'icon': 'fa-baseball-bat-ball', 'desc': 'Front / straight drive'},
         'cut':     {'icon': 'fa-bolt', 'desc': 'Back-foot square cut'},
-        'flick':   {'icon': 'fa-bullseye', 'desc': 'Wristy on-side flick'}
+        'flick':   {'icon': 'fa-bullseye', 'desc': 'Wristy on-side flick'},
+        'pull shot': {'icon': 'fa-baseball-bat-ball', 'desc': 'Pull shot'},
+        'unknown': {'icon': 'fa-question', 'desc': 'Let the analysis classify the shot'}
     } %}
 
-    <form id="uploadForm" action="{{ url_for('upload_submit') }}" method="post" enctype="multipart/form-data">
+    {% if error %}
+    <div class="note warn" role="alert" style="margin-bottom:16px;">
+        <i class="fas fa-triangle-exclamation"></i>
+        <div>{{ error }}</div>
+    </div>
+    {% endif %}
+
+    <form id="uploadForm"
+          action="{{ url_for('upload_submit') }}"
+          method="post"
+          enctype="multipart/form-data">
 
         <div class="upload-layout">
-            <!-- LEFT: file upload -->
+
+            <!-- VIDEO FILE -->
             <div class="card">
                 <div class="card-header">
-                    <span class="card-icon ic-blue"><i class="fas fa-file-video"></i></span>
+                    <span class="card-icon ic-blue">
+                        <i class="fas fa-file-video"></i>
+                    </span>
                     1 &middot; Video File
                 </div>
 
-                <input type="file" name="video" id="videoInput"
-                       accept="video/mp4,video/avi,video/x-msvideo,video/quicktime,video/x-matroska,.mp4,.avi,.mov,.mkv"
-                       required class="hidden">
+                <input
+                    type="file"
+                    name="video"
+                    id="videoInput"
+                    accept=".mp4,.avi,.mov,.mkv,.mpg,.mpeg,video/*"
+                    required
+                    class="hidden">
 
-                <div class="dropzone" id="dropzone">
+                <div class="dropzone" id="dropzone" role="button" tabindex="0"
+                     aria-label="Choose a cricket video">
                     <div class="dropzone-icon">
                         <i class="fas fa-cloud-arrow-up"></i>
                     </div>
                     <div class="dropzone-title">Drag &amp; drop your video</div>
-                    <div class="dropzone-sub">or click to browse &middot; MP4, AVI, MOV, MKV</div>
+                    <div class="dropzone-sub">
+                        or click to browse &middot; MP4, AVI, MOV, MKV, MPG
+                    </div>
                 </div>
 
                 <div class="file-card hidden" id="fileCard">
-                    <div class="file-card-icon"><i class="fas fa-film"></i></div>
+                    <div class="file-card-icon">
+                        <i class="fas fa-film"></i>
+                    </div>
                     <div>
                         <div class="file-card-name" id="fcName">—</div>
                         <div class="file-card-meta" id="fcMeta"></div>
@@ -47,64 +77,81 @@
                 </div>
             </div>
 
-            <!-- RIGHT: shot type -->
+            <!-- SHOT TYPE -->
             <div class="card">
                 <div class="card-header">
-                    <span class="card-icon ic-green"><i class="fas fa-crosshairs"></i></span>
+                    <span class="card-icon ic-green">
+                        <i class="fas fa-crosshairs"></i>
+                    </span>
                     2 &middot; Shot Type
                 </div>
+
                 <div class="shot-picker" id="shotPicker">
                     {% for s in shot_types %}
                     <label class="shot-opt" data-shot="{{ s }}">
                         <input type="radio" name="shot_type" value="{{ s }}" required>
-                        <span class="so-icon"><i class="fas {{ shot_meta.get(s, {}).get('icon', 'fa-baseball-bat-ball') }}"></i></span>
+                        <span class="so-icon">
+                            <i class="fas {{ shot_meta.get(s, {}).get('icon', 'fa-baseball-bat-ball') }}"></i>
+                        </span>
                         <span class="so-name">{{ s | capitalize }}</span>
                         <span class="so-desc">{{ shot_meta.get(s, {}).get('desc', '') }}</span>
                     </label>
                     {% endfor %}
                 </div>
+
                 <hr class="sep">
+
                 <button type="submit" class="btn btn-primary btn-block" id="startBtn">
                     <i class="fas fa-play"></i>
                     Start Analysis
                 </button>
             </div>
+
         </div>
 
-        <!-- PROGRESS PANEL -->
+        <!-- UPLOAD / ANALYSIS PROGRESS -->
         <div class="card progress-panel hidden" id="progressPanel">
             <div class="progress-header">
                 <div class="spinner"></div>
                 <div>
                     <div class="progress-title">Processing video&hellip;</div>
-                    <div class="progress-sub" id="progressText">Uploading video&hellip;</div>
+                    <div class="progress-sub" id="progressText">
+                        Uploading video&hellip;
+                    </div>
                 </div>
             </div>
-            <div class="progress-bar"><span class="progress-bar-fill" id="progressBar"></span></div>
-            <div class="step-list">
-                <div id="st-upload"  class="step-item pending"><span class="step-dot"></span>Video Uploaded</div>
-                <div id="st-pose"    class="step-item pending"><span class="step-dot"></span>Detecting Player Pose</div>
-                <div id="st-land"    class="step-item pending"><span class="step-dot"></span>Extracting Landmarks</div>
-                <div id="st-angle"   class="step-item pending"><span class="step-dot"></span>Calculating Joint Angles</div>
-                <div id="st-phase"   class="step-item pending"><span class="step-dot"></span>Detecting Batting Phases</div>
-                <div id="st-feat"    class="step-item pending"><span class="step-dot"></span>Extracting Biomechanics Features</div>
-                <div id="st-results" class="step-item pending"><span class="step-dot"></span>Generating Results</div>
+
+            <div class="progress-bar">
+                <span class="progress-bar-fill" id="progressBar"></span>
             </div>
-            <p class="small faint" style="margin-top:12px;">
-                <i class="fas fa-circle-info" style="font-size:0.75rem;"></i>
-                Analysis runs on the server and typically takes about a minute
-                per clip. You'll be taken to a live progress page that opens
-                your results automatically when it's done.
-            </p>
+
+            <div class="step-list">
+                <div id="st-upload" class="step-item pending">
+                    <span class="step-dot"></span>Video Uploaded
+                </div>
+                <div id="st-pose" class="step-item pending">
+                    <span class="step-dot"></span>Detecting Player Pose
+                </div>
+                <div id="st-land" class="step-item pending">
+                    <span class="step-dot"></span>Extracting Landmarks
+                </div>
+                <div id="st-angle" class="step-item pending">
+                    <span class="step-dot"></span>Calculating Joint Angles
+                </div>
+                <div id="st-phase" class="step-item pending">
+                    <span class="step-dot"></span>Detecting Batting Phases
+                </div>
+                <div id="st-feat" class="step-item pending">
+                    <span class="step-dot"></span>Extracting Biomechanics Features
+                </div>
+                <div id="st-results" class="step-item pending">
+                    <span class="step-dot"></span>Generating Batting Rating
+                </div>
+            </div>
         </div>
+
     </form>
 
-    <div class="note info" style="margin-top:16px;">
-        <i class="fas fa-circle-info"></i>
-        After analysis you'll receive an <strong>annotated video</strong> (skeleton, phases,
-        live HUD), a phase timeline, key performance metrics, joint angles and charts
-        &mdash; stored under <code>output_data/&lt;video_name&gt;/</code>.
-    </div>
-
 </div>
+
 {% endblock %}
