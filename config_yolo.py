@@ -20,16 +20,16 @@ REPORTS_DIR = BASE_DIR / "reports"
 # ============================================================
 # When running on batsman crops, we only need 1 pose (the batsman)
 ROI_NUM_POSES = 1
-ROI_MIN_POSE_DETECTION_CONFIDENCE = 0.3
-ROI_MIN_POSE_PRESENCE_CONFIDENCE = 0.3
-ROI_MIN_TRACKING_CONFIDENCE = 0.3
+ROI_MIN_POSE_DETECTION_CONFIDENCE = 0.20  # Lowered from 0.3 for better detection
+ROI_MIN_POSE_PRESENCE_CONFIDENCE = 0.20   # Lowered from 0.3
+ROI_MIN_TRACKING_CONFIDENCE = 0.20        # Lowered from 0.3
 
 # ROI padding (fraction of bbox size to add around the batsman)
-ROI_PADDING_X = 0.15  # 15% padding horizontally
-ROI_PADDING_Y = 0.10  # 10% padding vertically
+ROI_PADDING_X = 0.20  # 20% padding horizontally
+ROI_PADDING_Y = 0.15  # 15% padding vertically
 
 # Minimum ROI size to run MediaPipe
-MIN_ROI_SIZE = 64
+MIN_ROI_SIZE = 40
 
 # ============================================================
 # YOLO Configuration
@@ -37,7 +37,7 @@ MIN_ROI_SIZE = 64
 # Use yolov8n.pt (nano) - YOLO11 models have detection issues in current ultralytics version
 # Can be overridden by setting YOLO_MODEL_NAME env var
 YOLO_MODEL_NAME = "yolov8n.pt"
-YOLO_CONF_THRESHOLD = 0.25  # Confidence threshold for person detection
+YOLO_CONF_THRESHOLD = 0.15  # Lowered from 0.25 for better detection of distant/small players
 YOLO_PERSON_CLASS = 0  # COCO class 0 = person
 YOLO_TRACKER_CONFIG = "bytetrack_custom.yaml"
 YOLO_PERSIST = True
@@ -73,11 +73,13 @@ YOLO_VERBOSE = False
 # - If no detections: increase ROI_CROP_PAD_X/Y to give YOLO more context
 
 # Centralized ROI configuration dictionary (easy to modify/override)
+# Wider default ROI to handle different camera angles and batsman movement
+# Can be overridden via command line: --roi x1 y1 x2 y2 (normalized 0-1)
 BATSMAN_ROI = {
-    "x1": 0.30,   # Left boundary (normalized)
-    "y1": 0.15,   # Top boundary (normalized)
-    "x2": 0.70,   # Right boundary (normalized)
-    "y2": 0.75,   # Bottom boundary (normalized)
+    "x1": 0.30,   # Left boundary (normalized) - wider to capture full stance
+    "y1": 0.10,   # Top boundary (normalized) - higher to capture backlift
+    "x2": 0.75,   # Right boundary (normalized) - wider for different shot types
+    "y2": 0.85,   # Bottom boundary (normalized) - lower to capture follow-through
 }
 
 # Backwards-compatible individual constants (derived from BATSMAN_ROI)
@@ -93,7 +95,7 @@ ROI_CROP_PAD_Y = 0.05   # 5% padding vertically
 
 # Minimum overlap with ROI required for a detection to be considered a batsman candidate
 # (after converting back to full-frame coordinates)
-BATSMAN_ROI_MIN_OVERLAP = 0.30  # 30% overlap minimum (IoU or coverage)
+BATSMAN_ROI_MIN_OVERLAP = 0.35  # 25% overlap minimum - reduced to catch more detections
 
 # ============================================================
 # Batsman Selection Configuration
@@ -104,70 +106,84 @@ BATSMAN_ROI_MIN_OVERLAP = 0.30  # 30% overlap minimum (IoU or coverage)
 # ============================================================
 
 # Temporal stability
-BATSMAN_LOCK_FRAMES = 15          # Frames to maintain lock before allowing switch
-BATSMAN_SWITCH_THRESHOLD = 2.0    # Score ratio required to switch batsman
-BATSMAN_LOST_TOLERANCE = 20       # Frames to keep lock after person lost
-MIN_LOCK_FRAMES_BEFORE_SWITCH = 5 # Minimum frames locked before any switch allowed
+BATSMAN_LOCK_FRAMES = 80          # Frames to maintain lock before allowing switch (increased from 15)
+BATSMAN_SWITCH_THRESHOLD = 3.0    # Score ratio required to switch batsman (increased from 2.0)
+BATSMAN_LOST_TOLERANCE = 80       # Frames to keep lock after person lost (increased from 20)
+MIN_LOCK_FRAMES_BEFORE_SWITCH = 10 # Minimum frames locked before any switch allowed (increased from 5)
 
 # NEW: Physical-person tracking (track-ID independent)
 # Maximum frames to maintain batsman state after YOLO loses detection
-BATSMAN_MAX_LOST_FRAMES = 15      # Configurable recovery window for YOLO dropouts
+BATSMAN_MAX_LOST_FRAMES = 80      # Configurable recovery window for YOLO dropouts (increased from 15)
 
 # Continuity scoring weights (for track-ID independent selection)
-CONTINUITY_SPATIAL_WEIGHT = 0.30      # Distance from previous batsman center
-CONTINUITY_IOU_WEIGHT = 0.25          # IoU with previous bbox
+CONTINUITY_SPATIAL_WEIGHT = 0.55      # Distance from previous batsman center (increased)
+CONTINUITY_IOU_WEIGHT = 0.30          # IoU with previous bbox (increased)
 CONTINUITY_SIZE_WEIGHT = 0.20         # Size similarity with previous bbox
-CONTINUITY_ROI_POSITION_WEIGHT = 0.15 # Position within batting ROI
-CONTINUITY_MOVEMENT_WEIGHT = 0.10     # Movement consistency
+CONTINUITY_ROI_POSITION_WEIGHT = 0.10 # Position within batting ROI
+CONTINUITY_MOVEMENT_WEIGHT = 0.05     # Movement consistency
 
 # Maximum displacement for continuity (normalized)
-MAX_CONTINUITY_DISPLACEMENT = 0.15    # Max center movement per frame (normalized)
+MAX_CONTINUITY_DISPLACEMENT = 0.20    # Max center movement per frame (normalized) - increased
 
 # Minimum IoU for spatial continuity
-MIN_CONTINUITY_IOU = 0.20
+MIN_CONTINUITY_IOU = 0.05             # Lowered to allow more continuity
 
 # Size similarity tolerance
-MAX_SIZE_RATIO_DIFF = 0.50            # Max allowed size ratio difference
+MAX_SIZE_RATIO_DIFF = 0.60            # Max allowed size ratio difference (increased)
 
 # Evidence weights (must sum to ~1.0 for normalized scoring)
-POSITION_WEIGHT = 0.20            # Reduced - less reliance on fixed position
-SIZE_WEIGHT = 0.20                # Bounding box size (batsman typically larger/closer)
-POSE_WEIGHT = 0.20                # Pose proxy from bbox geometry
-TEMPORAL_WEIGHT = 0.15            # Temporal consistency
+# Increased position and continuity weights to better identify the batsman
+POSITION_WEIGHT = 0.10            # More reliance on batting crease position
+SIZE_WEIGHT = 0.15                # Bounding box size (batsman typically larger/closer)
+POSE_WEIGHT = 0.15                # Pose proxy from bbox geometry
+TEMPORAL_WEIGHT = 0.10            # Temporal consistency
 MOVEMENT_WEIGHT = 0.10            # Movement pattern consistency
-CONTINUITY_WEIGHT = 0.15          # NEW: Physical-person continuity score
+CONTINUITY_WEIGHT = 0.55          # Physical-person continuity is key
 
-# Position priors - expanded for different shot types
-BATTING_REGION_CENTER = (0.50, 0.45)  # Normalized (x, y) - batsman typically center-right
-BATTING_REGION_SIGMA = (0.25, 0.20)   # Increased from (0.15, 0.12) - wider for different shot types
+# Position priors - focused on batting crease
+BATTING_REGION_CENTER = (0.39, 0.55)  # Normalized (x, y) - batsman typically center, slightly higher
+BATTING_REGION_SIGMA = (0.08, 0.25)   # Slightly wider for shot variations
 
 # Body proportions (normalized by bbox height)
 MIN_BATSMAN_BBOX_HEIGHT = 0.08      # Reduced - allow smaller batsmen
 IDEAL_BATSMAN_BBOX_HEIGHT = 0.35    # Ideal normalized bbox height
 
 # Wicketkeeper/Non-striker rejection zones
-WICKETKEEPER_Y_MIN = 0.55           # Wicketkeeper typically behind stumps (y > 0.55)
-NON_STRIKER_X_MAX = 0.30            # Non-striker at other end (x < 0.30)
+WICKETKEEPER_Y_MIN = 0.65           # Wicketkeeper typically behind stumps (y > 0.60)
+NON_STRIKER_X_MAX = 0.25            # Non-striker at other end (x < 0.35)
 NON_STRIKER_Y_MIN = 0.50            # Non-striker also often crouched
 
 # Confidence thresholds
-BATSMAN_CONFIDENCE_THRESHOLD = 0.20  # Reduced - allow lower scores
-MIN_SCORE_DIFFERENTIAL = 0.10        # Minimum score difference between top candidates
+BATSMAN_CONFIDENCE_THRESHOLD = 0.02  # Reduced - allow lower scores
+MIN_SCORE_DIFFERENTIAL = 0.08        # Minimum score difference between top candidates
 
 # Tracking recovery
-MAX_RECOVERY_FRAMES = 15             # Keep using last bbox for frames after YOLO loses track
+MAX_RECOVERY_FRAMES = 30             # Keep using last bbox for frames after YOLO loses track (increased from 15)
 
-MIN_LOCK_FRAMES_BEFORE_SWITCH = 5    # Minimum frames locked before any switch allowed
+MIN_LOCK_FRAMES_BEFORE_SWITCH = 10    # Minimum frames locked before any switch allowed (increased from 5)
 
 # ============================================================
 # MediaPipe ROI Configuration (for small bbox handling)
 # ============================================================
 # Minimum crop size for MediaPipe (pixels)
-MIN_MEDIAPIPE_CROP_SIZE = 48        # Reduced from 64 to handle small bboxes
+MIN_MEDIAPIPE_CROP_SIZE = 40        # Reduced from 48 to handle very small bboxes
 
 # Crop expansion for small bboxes (fraction of bbox size)
-MEDIAPIPE_CROP_EXPANSION_X = 0.25   # Expand crop by 25% horizontally
-MEDIAPIPE_CROP_EXPANSION_Y = 0.20   # Expand crop by 20% vertically
+MEDIAPIPE_CROP_EXPANSION_X = 0.30   # Expand crop by 30% horizontally (increased)
+MEDIAPIPE_CROP_EXPANSION_Y = 0.25   # Expand crop by 25% vertically (increased)
+
+# ============================================================
+# MediaPipe Pose Configuration - improved detection
+# ============================================================
+# Number of poses to detect (keep at 1 for batsman crop)
+ROI_NUM_POSES = 1
+ROI_MIN_POSE_DETECTION_CONFIDENCE = 0.25  # Lowered for better detection
+ROI_MIN_POSE_PRESENCE_CONFIDENCE = 0.25   # Lowered for better detection
+ROI_MIN_TRACKING_CONFIDENCE = 0.25        # Lowered for better detection
+
+# ROI padding (fraction of bbox size to add around the batsman)
+ROI_PADDING_X = 0.20  # 20% padding horizontally (increased from 15%)
+ROI_PADDING_Y = 0.15  # 15% padding vertically (increased from 10%)
 
 # ============================================================
 # Debug Configuration

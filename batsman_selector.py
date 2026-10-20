@@ -185,6 +185,34 @@ class BatsmanSelection:
 # Continuity Scoring Functions
 # ---------------------------------------------------------------------------
 
+def get_last_known_state(candidate: PersonTrack) -> Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float, float, float]], Optional[float], Optional[float]]:
+    """
+    Get the last known center, bbox, height, width from candidate.
+    Uses current state if available, otherwise falls back to position history.
+    """
+    center = candidate.center
+    bbox = candidate.bbox
+    bbox_height = candidate.bbox_height
+    bbox_width = candidate.bbox_width
+    
+    # If current state is None/NaN, use last known from position history
+    if (center is None or (hasattr(center, '__len__') and len(center) == 2 and (center[0] != center[0] or center[1] != center[1]))) and candidate.position_history:
+        # Find last valid center in history
+        for p in reversed(candidate.position_history):
+            if p is not None and p[0] == p[0] and p[1] == p[1]:  # not NaN
+                center = p
+                break
+    
+    if (bbox is None or (hasattr(bbox, '__len__') and len(bbox) == 4 and any(b != b for b in bbox))) and len(candidate.position_history) >= 2:
+        # Reconstruct bbox from last two positions (approximate)
+        last_center = center
+        if last_center is not None:
+            # Use average bbox size from history if available
+            pass  # Keep bbox as None if we can't reconstruct
+    
+    return center, bbox, bbox_height, bbox_width
+
+
 def compute_continuity_score(candidate: PersonTrack, 
                              prev_state: Optional[Dict]) -> float:
     """
@@ -200,27 +228,30 @@ def compute_continuity_score(candidate: PersonTrack,
     if prev_state is None:
         return 0.5  # Neutral if no previous state
     
+    # Use last known state for continuity calculation
+    center, bbox, bbox_height, bbox_width = get_last_known_state(candidate)
+    
     score = 0.0
     
     # 1. Spatial continuity: distance from previous center
     prev_center = prev_state.get('center')
-    if prev_center is not None and candidate.center is not None:
-        dist = math.hypot(candidate.center[0] - prev_center[0], 
-                         candidate.center[1] - prev_center[1])
+    if prev_center is not None and center is not None:
+        dist = math.hypot(center[0] - prev_center[0], 
+                         center[1] - prev_center[1])
         # Gaussian decay with max displacement
         spatial_score = math.exp(-0.5 * (dist / MAX_CONTINUITY_DISPLACEMENT) ** 2)
         score += CONTINUITY_SPATIAL_WEIGHT * spatial_score
     
     # 2. IoU continuity: overlap with previous bbox
     prev_bbox = prev_state.get('bbox')
-    if prev_bbox is not None and candidate.bbox is not None:
-        iou = bbox_iou(candidate.bbox, prev_bbox)
+    if prev_bbox is not None and bbox is not None:
+        iou = bbox_iou(bbox, prev_bbox)
         iou_score = clamp(iou / MIN_CONTINUITY_IOU) if iou > 0 else 0.0
         score += CONTINUITY_IOU_WEIGHT * iou_score
     
     # 3. Size continuity: similarity in bbox height/width
-    if prev_state.get('bbox_height') is not None and candidate.bbox_height > 0:
-        size_ratio = candidate.bbox_height / max(prev_state['bbox_height'], 1e-6)
+    if prev_state.get('bbox_height') is not None and bbox_height is not None and bbox_height > 0:
+        size_ratio = bbox_height / max(prev_state['bbox_height'], 1e-6)
         if 1.0 - MAX_SIZE_RATIO_DIFF <= size_ratio <= 1.0 + MAX_SIZE_RATIO_DIFF:
             size_score = 1.0 - abs(1.0 - size_ratio) / MAX_SIZE_RATIO_DIFF
         else:
@@ -229,12 +260,12 @@ def compute_continuity_score(candidate: PersonTrack,
     
     # 4. ROI position: candidate's position within batting ROI
     roi = roi_bbox()
-    if candidate.center is not None:
+    if center is not None:
         # Distance from ROI center
         roi_cx = (roi[0] + roi[2]) / 2
         roi_cy = (roi[1] + roi[3]) / 2
-        dist_from_roi_center = math.hypot(candidate.center[0] - roi_cx, 
-                                          candidate.center[1] - roi_cy)
+        dist_from_roi_center = math.hypot(center[0] - roi_cx, 
+                                          center[1] - roi_cy)
         roi_radius = math.hypot(roi[2] - roi[0], roi[3] - roi[1]) / 2
         roi_score = max(0.0, 1.0 - dist_from_roi_center / roi_radius)
         score += CONTINUITY_ROI_POSITION_WEIGHT * roi_score
@@ -245,6 +276,11 @@ def compute_continuity_score(candidate: PersonTrack,
         for i in range(1, len(candidate.position_history)):
             p1 = candidate.position_history[i-1]
             p2 = candidate.position_history[i]
+            # Skip NaN positions
+            if p1 is None or p2 is None:
+                continue
+            if p1[0] != p1[0] or p1[1] != p1[1] or p2[0] != p2[0] or p2[1] != p2[1]:
+                continue
             steps.append(math.hypot(p2[0] - p1[0], p2[1] - p1[1]))
         if len(steps) >= 2:
             mean_step = np.mean(steps)
@@ -361,36 +397,47 @@ class BatsmanSelector:
         continuity_scores = {}
         
         for track_id, track in self.track_history.items():
-            # Only score currently detected tracks (frames_lost == 0)
-            # Tracks with frames_lost > 0 are not in the current frame
-            if track.frames_lost > 0:
-                continue
+            # Score tracks that are currently detected OR within lost tolerance
+            # This allows continuity-based tracking during brief YOLO dropouts
             if track.frames_lost > BATSMAN_LOST_TOLERANCE:
                 continue
             
-            # Position score: Gaussian prior around batting region
-            track.position_score = gaussian_prior(
-                track.center, BATTING_REGION_CENTER, BATTING_REGION_SIGMA)
+            is_currently_detected = (track.frames_lost == 0)
             
-            # Size score: prefer taller bboxes (closer/larger person)
-            if track.bbox_height >= MIN_BATSMAN_BBOX_HEIGHT:
-                track.size_score = clamp(track.bbox_height / IDEAL_BATSMAN_BBOX_HEIGHT)
+            if is_currently_detected:
+                # Full scoring for currently detected tracks
+                # Position score: Gaussian prior around batting region
+                track.position_score = gaussian_prior(
+                    track.center, BATTING_REGION_CENTER, BATTING_REGION_SIGMA)
+                
+                # Size score: prefer taller bboxes (closer/larger person)
+                if track.bbox_height >= MIN_BATSMAN_BBOX_HEIGHT:
+                    track.size_score = clamp(track.bbox_height / IDEAL_BATSMAN_BBOX_HEIGHT)
+                else:
+                    track.size_score = 0.1  # Small penalty for too small
+                
+                # Pose score: from MediaPipe features (bbox geometry proxy)
+                track.pose_score = self._compute_pose_score(track)
+                
+                # Temporal score: reward consistent presence
+                if track.frames_tracked > 0:
+                    track.temporal_score = clamp(track.frames_tracked / 30.0)
+                else:
+                    track.temporal_score = 0.0
+                
+                # Movement score: smooth, consistent movement
+                track.movement_score = self._compute_movement_score(track)
             else:
-                track.size_score = 0.1  # Small penalty for too small
-            
-            # Pose score: from MediaPipe features (bbox geometry proxy)
-            track.pose_score = self._compute_pose_score(track)
-            
-            # Temporal score: reward consistent presence
-            if track.frames_tracked > 0:
-                track.temporal_score = clamp(track.frames_tracked / 30.0)
-            else:
-                track.temporal_score = 0.0
-            
-            # Movement score: smooth, consistent movement
-            track.movement_score = self._compute_movement_score(track)
+                # Track is temporarily lost - use last known state for continuity only
+                # Position/size/pose/temporal scores are not updated (use last values or 0)
+                track.position_score = track.position_score if track.position_score > 0 else 0.0
+                track.size_score = track.size_score if track.size_score > 0 else 0.0
+                track.pose_score = track.pose_score if track.pose_score > 0 else 0.0
+                track.temporal_score = track.temporal_score if track.temporal_score > 0 else 0.0
+                track.movement_score = track.movement_score if track.movement_score > 0 else 0.0
             
             # Continuity score: physical-person tracking (track-ID independent)
+            # This works for both detected and recently lost tracks
             track.continuity_score = compute_continuity_score(track, self.prev_batsman_state)
             
             # Weighted total (evidence + continuity)
@@ -512,21 +559,66 @@ class BatsmanSelector:
         second_score = sorted_tracks[1][1] if len(sorted_tracks) > 1 else 0.0
         best_continuity = continuity_scores.get(best_id, 0.0)
         
-        # Safety guard: never replace a lost batsman with another person.
+        # Safety guard: when current track ID is lost, try to find continuity match
         if self.current_batsman_id is not None and self.current_batsman_id not in scores:
             self.batsman_lost_frames += 1
             self.batsman_recovery_active = True
+            
+            # Try to find the same physical person via continuity scoring
+            best_continuity_match = None
+            best_continuity_score = 0.0
+            
+            for track_id, cont_score in continuity_scores.items():
+                if cont_score > best_continuity_score and cont_score >= 0.5:
+                    best_continuity_match = track_id
+                    best_continuity_score = cont_score
+            
+            # If we found a high-continuity match, select it as the same physical person
+            if best_continuity_match is not None:
+                match_score = scores.get(best_continuity_match, 0.0)
+                track_id_changed = True
+                # Same physical person, just track ID changed
+                return BatsmanSelection(
+                    selected_track_id=best_continuity_match,
+                    confidence=scores.get(best_continuity_match, 0.0),
+                    all_scores=scores,
+                    all_continuity_scores=continuity_scores,
+                    reason="track_id_lost_continuity_recovery",
+                    frame=frame_num,
+                    physical_batsman_id=self.physical_batsman_id,
+                    track_id_changed=True,
+                    batsman_lost=False,
+                    recovery_active=True
+                )
+            
+            # No good continuity match - check if we should wait for recovery
+            if self.batsman_lost_frames <= BATSMAN_MAX_LOST_FRAMES:
+                # Still in recovery window - maintain physical person state but no selection
+                return BatsmanSelection(
+                    selected_track_id=None,
+                    confidence=0.0,
+                    all_scores=scores,
+                    all_continuity_scores=continuity_scores,
+                    reason="track_id_lost_awaiting_recovery",
+                    frame=frame_num,
+                    physical_batsman_id=self.physical_batsman_id,
+                    track_id_changed=False,
+                    batsman_lost=False,
+                    recovery_active=True
+                )
+            
+            # Recovery window exceeded - lost for good
             return BatsmanSelection(
                 selected_track_id=None,
                 confidence=0.0,
                 all_scores=scores,
                 all_continuity_scores=continuity_scores,
-                reason="locked_batsman_track_missing_no_fallback",
+                reason="locked_batsman_track_missing_recovery_exceeded",
                 frame=frame_num,
                 physical_batsman_id=self.physical_batsman_id,
                 track_id_changed=False,
                 batsman_lost=True,
-                recovery_active=True
+                recovery_active=False
             )
 
         # Check confidence threshold

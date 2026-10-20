@@ -641,6 +641,7 @@ h3 { font-size: 1.1rem; }
 .b-defence  { background: var(--cyan-dim); color: var(--cyan); }
 .b-drive    { background: var(--green-dim); color: var(--green); }
 .b-flick    { background: var(--amber-dim); color: var(--amber); }
+.b-lofted   { background: var(--blue-dim); color: var(--blue); }
 .b-unknown  { background: var(--surface-3); color: var(--text-2); }
 .b-neutral  { background: var(--surface-3); color: var(--text-2); }
 .b-success  { background: var(--green-dim); color: var(--green); }

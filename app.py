@@ -33,7 +33,7 @@ init_db()
 ALLOWED_EXTENSIONS = {'.mp4', '.avi', '.mov', '.mkv', '.mpg', '.mpeg'}
 
 # Supported shot types
-SHOT_TYPES = ['defence', 'drive', 'cut', 'flick', 'pull shot', 'unknown']
+SHOT_TYPES = ['defence', 'drive', 'cut', 'flick', 'pull shot', 'lofted']
 
 PIPELINE_STAGES = [
     "Uploaded video",
@@ -167,7 +167,7 @@ def get_dataset_stats():
                 try:
                     with open(class_file) as f:
                         data = json.load(f)
-                        shot_type = data.get('shot_type', 'unknown')
+                        shot_type = data.get('shot_type', SHOT_TYPES[0])
                 except:
                     pass
             stats['distribution'][shot_type] = stats['distribution'].get(shot_type, 0) + 1
@@ -384,13 +384,25 @@ def get_results(video_name):
         'tracking_debug': 'tracking_debug.csv',
     }
     
+    import math
+
+    def clean_nan(obj):
+        """Recursively replace NaN floats with None for JSON serialization."""
+        if isinstance(obj, float):
+            return None if math.isnan(obj) else obj
+        elif isinstance(obj, dict):
+            return {k: clean_nan(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [clean_nan(v) for v in obj]
+        return obj
+
     for key, filename in result_files.items():
         filepath = result_dir / filename
         if filepath.exists():
             try:
                 import pandas as pd
                 df = pd.read_csv(filepath)
-                results[key] = df.to_dict(orient='records')
+                results[key] = clean_nan(df.to_dict(orient='records'))
             except Exception as e:
                 results[key] = {'error': str(e)}
     
@@ -426,7 +438,7 @@ def analyze_video():
     if not allowed_file(file.filename):
         return jsonify({'error': 'Invalid file type'}), 400
     
-    shot_type = request.form.get('shot_type', 'unknown')
+    shot_type = request.form.get('shot_type', SHOT_TYPES[0])
     
     # Save uploaded file
     filename = secure_filename(file.filename)
@@ -455,7 +467,7 @@ def analyze_local():
     if not video_path.exists():
         return jsonify({'error': 'Video not found'}), 404
     
-    shot_type = data.get('shot_type', 'unknown')
+    shot_type = data.get('shot_type', SHOT_TYPES[0])
     
     try:
         from main import process_video
@@ -517,10 +529,10 @@ def upload_submit():
             error='Invalid file type. Use MP4, AVI, MOV, MPG, or MKV'
         )
 
-    shot_type = request.form.get('shot_type', 'unknown')
+    shot_type = request.form.get('shot_type', SHOT_TYPES[0])
 
     if shot_type not in SHOT_TYPES:
-        shot_type = 'unknown'
+        shot_type = SHOT_TYPES[0]
 
     filename = secure_filename(file.filename)
 
@@ -626,13 +638,25 @@ def results_page(video_name):
         'tracking_debug': 'tracking_debug.csv',
     }
     
+    import math
+
+    def clean_nan(obj):
+        """Recursively replace NaN floats with None for JSON serialization."""
+        if isinstance(obj, float):
+            return None if math.isnan(obj) else obj
+        elif isinstance(obj, dict):
+            return {k: clean_nan(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [clean_nan(v) for v in obj]
+        return obj
+    
     for key, filename in result_files.items():
         filepath = result_dir / filename
         if filepath.exists():
             try:
                 import pandas as pd
                 df = pd.read_csv(filepath)
-                results[key] = df.to_dict(orient='records')
+                results[key] = clean_nan(df.to_dict(orient='records'))
             except Exception as e:
                 results[key] = {'error': str(e)}
     
@@ -663,6 +687,14 @@ def results_page(video_name):
     if results.get('rating'):
         r = results['rating'][0] if isinstance(results['rating'], list) and results['rating'] else {}
         if r and 'rating' in r:
+            # Split pipe-separated strengths/weaknesses from CSV
+            strengths = r.get('strengths', [])
+            if isinstance(strengths, str):
+                strengths = [s.strip() for s in strengths.split('|') if s.strip()]
+            weaknesses = r.get('weaknesses', [])
+            if isinstance(weaknesses, str):
+                weaknesses = [w.strip() for w in weaknesses.split('|') if w.strip()]
+            
             rating = {
                 'rating': r.get('rating', 0),
                 'classification': r.get('classification', 'Unknown'),
@@ -670,8 +702,8 @@ def results_page(video_name):
                 'covered_weight': r.get('covered_weight', 0),
                 'unavailable_metrics': r.get('unavailable_metrics', []),
                 'explanation': r.get('explanation', ''),
-                'strengths': r.get('strengths', []),
-                'weaknesses': r.get('weaknesses', []),
+                'strengths': strengths,
+                'weaknesses': weaknesses,
                 'factors': r.get('factors', [])
             }
     
@@ -738,18 +770,57 @@ def results_page(video_name):
             }
     
     # Impact angles
+    import math
     impact_angles = {}
     impact_angle_columns = []
     impact_angle_labels = {}
     if results.get('angles'):
         angles_df = results['angles']
         if isinstance(angles_df, list) and angles_df:
-            # Find impact frame row
-            impact_idx = metrics.get('impact_frame', 0) if metrics else 0
-            if impact_idx < len(angles_df):
+            # Find impact frame row - prefer first impact frame with valid data
+            # Use phase_timeline's impact_frame if available, else metrics
+            impact_idx = phase_timeline.get('impact_frame') if phase_timeline else None
+            if impact_idx is None:
+                impact_idx = metrics.get('impact_frame', 0) if metrics else 0
+            
+            # If the impact frame has all NaN angles, search nearby frames for valid data
+            def has_valid_angles(row):
+                for col, val in row.items():
+                    if col not in ['frame', 'timestamp'] and val is not None:
+                        try:
+                            if isinstance(val, float) and math.isnan(val):
+                                continue
+                        except (TypeError, ValueError):
+                            pass
+                        return True
+                return False
+            
+            # Check impact frame and nearby frames for valid angles
+            if impact_idx is not None and impact_idx < len(angles_df):
+                if not has_valid_angles(angles_df[impact_idx]):
+                    # Search forward and backward for a frame with valid angles
+                    for offset in range(1, 10):
+                        # Check backward first (earlier frames)
+                        check_idx = impact_idx - offset
+                        if check_idx >= 0 and has_valid_angles(angles_df[check_idx]):
+                            impact_idx = check_idx
+                            break
+                        # Check forward
+                        check_idx = impact_idx + offset
+                        if check_idx < len(angles_df) and has_valid_angles(angles_df[check_idx]):
+                            impact_idx = check_idx
+                            break
+            
+            if impact_idx is not None and impact_idx < len(angles_df):
                 impact_row = angles_df[impact_idx]
                 for col, val in impact_row.items():
                     if col not in ['frame', 'timestamp'] and val is not None:
+                        # Skip NaN values
+                        try:
+                            if isinstance(val, float) and math.isnan(val):
+                                continue
+                        except (TypeError, ValueError):
+                            pass
                         impact_angles[col] = val
                         impact_angle_columns.append(col)
                         # Create label

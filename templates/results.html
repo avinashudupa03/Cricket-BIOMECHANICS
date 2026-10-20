@@ -1,6 +1,6 @@
 ﻿
 {% extends "base.html" %}
-{% block title %}Analysis â€” {{ data["video_name"] }} &mdash; CricBiomech AI{% endblock %}
+{% block title %}Analysis — {{ data["video_name"] }} — CricBiomech AI{% endblock %}
 {% block content %}
 
 <!-- ================= PAGE HEADER ================= -->
@@ -16,7 +16,7 @@
                 <span class="badge b-success"><i class="fas fa-check" style="font-size:0.65rem;"></i> Processed</span>
                 <span class="faint small" style="margin-left:4px;">
                     <i class="fas fa-film" style="font-size:0.7rem;"></i>
-                    {{ data["frames"] if data["frames"] is not none else "â€”" }} frames
+                    {{ data["frames"] if data["frames"] is not none else "—" }} frames
                 </span>
             </p>
         </div>
@@ -210,32 +210,32 @@
         {% set m = data["metrics"] %}
         <div class="metric-grid">
             <div class="metric-card" data-tooltip="Frame index at ball contact">
-                <div class="metric-value" data-counter="{{ m.get('impact_frame') if m.get('impact_frame') is not none else 0 }}">{{ m.get("impact_frame") if m.get("impact_frame") is not none else "â€”" }}</div>
+                <div class="metric-value" data-counter="{{ m.get('impact_frame') if m.get('impact_frame') is not none else 0 }}">{{ m.get("impact_frame") if m.get("impact_frame") is not none else "—" }}</div>
                 <div class="metric-label">Impact Frame</div>
                 <div class="metric-sub">frame index</div>
             </div>
             <div class="metric-card" data-tooltip="Milliseconds from start">
-                <div class="metric-value">{{ m.get("impact_time_ms") if m.get("impact_time_ms") is not none else "â€”" }}</div>
+                <div class="metric-value">{{ m.get("impact_time_ms") if m.get("impact_time_ms") is not none else "—" }}</div>
                 <div class="metric-label">Impact Time</div>
                 <div class="metric-sub">milliseconds</div>
             </div>
             <div class="metric-card" data-tooltip="Duration from backlift to impact">
-                <div class="metric-value">{{ m.get("downswing_duration_ms") if m.get("downswing_duration_ms") is not none else "â€”" }}</div>
+                <div class="metric-value">{{ m.get("downswing_duration_ms") if m.get("downswing_duration_ms") is not none else "—" }}</div>
                 <div class="metric-label">Downswing Duration</div>
                 <div class="metric-sub">ms</div>
             </div>
             <div class="metric-card" data-tooltip="Duration after ball contact">
-                <div class="metric-value">{{ m.get("followthrough_duration_ms") if m.get("followthrough_duration_ms") is not none else "â€”" }}</div>
+                <div class="metric-value">{{ m.get("followthrough_duration_ms") if m.get("followthrough_duration_ms") is not none else "—" }}</div>
                 <div class="metric-label">Follow-through</div>
                 <div class="metric-sub">ms</div>
             </div>
             <div class="metric-card" data-tooltip="Peak kinetic output">
-                <div class="metric-value">{{ "%.3f"|format(m["maximum_movement_score"]) if m.get("maximum_movement_score") is not none else "â€”" }}</div>
+                <div class="metric-value">{{ "%.3f"|format(m["maximum_movement_score"]) if m.get("maximum_movement_score") is not none else "—" }}</div>
                 <div class="metric-label">Max Movement Score</div>
                 <div class="metric-sub">peak output</div>
             </div>
             <div class="metric-card" data-tooltip="Mean movement across stroke">
-                <div class="metric-value">{{ "%.3f"|format(m["average_movement_score"]) if m.get("average_movement_score") is not none else "â€”" }}</div>
+                <div class="metric-value">{{ "%.3f"|format(m["average_movement_score"]) if m.get("average_movement_score") is not none else "—" }}</div>
                 <div class="metric-label">Avg Movement Score</div>
                 <div class="metric-sub">mean across stroke</div>
             </div>
@@ -261,25 +261,29 @@
             'Impact': '#ff6b8a',
             'Follow-through': '#a78bfa'
         } %}
+        {% set phase_order = ['Stance', 'Backlift', 'Downswing', 'Impact', 'Follow-through'] %}
         <div class="phase-timeline">
-            {% for seg in phase_timeline["segments"] %}
-            {% set w = ((seg["end"] - seg["start"] + 1) / total * 100) %}
-            <div class="phase-segment{% if seg['phase'] == 'Impact' %} impact-segment{% endif %}"
-                 style="width:{{ w }}%;background:{{ colors.get(seg['phase'], '#888') }};"
-                 data-tooltip="{{ seg['phase'] }}: frames {{ seg['start'] }}â€“{{ seg['end'] }} ({{ seg['end'] - seg['start'] + 1 }} frames)">
-                {{ seg["phase"] }}
-                <span class="phase-frames">{{ seg["start"] }}{% if seg["end"] != seg["start"] %}â€“{{ seg["end"] }}{% endif %}</span>
-            </div>
+            {% for phase_name in phase_order %}
+                {% set segs = phase_timeline["segments"] | selectattr('phase', 'equalto', phase_name) | list %}
+                {% for seg in segs %}
+                {% set w = ((seg["end"] - seg["start"] + 1) / total * 100) %}
+                <div class="phase-segment{% if seg['phase'] == 'Impact' %} impact-segment{% endif %}"
+                     style="width:{{ w }}%;background:{{ colors.get(seg['phase'], '#888') }};"
+                     data-tooltip="{{ seg['phase'] }}: frames {{ seg['start'] }}\u2013{{ seg['end'] }} ({{ seg['end'] - seg['start'] + 1 }} frames)">
+                    {{ seg["phase"] }}
+                    <span class="phase-frames">{{ seg["start"] }}{% if seg["end"] != seg["start"] %}\u2013{{ seg["end"] }}{% endif %}</span>
+                </div>
+                {% endfor %}
             {% endfor %}
         </div>
         <div class="phase-legend">
-            {% for p in ['Stance','Backlift','Downswing','Impact','Follow-through'] %}
+            {% for p in phase_order %}
             <span class="phase-legend-item"><span class="phase-legend-dot" style="background:{{ colors[p] }}"></span>{{ p }}</span>
             {% endfor %}
         </div>
         <p class="small faint" style="margin-top:12px;">
             Impact detected at frame
-            <strong style="color:var(--red);">{{ phase_timeline["impact_frame"] if phase_timeline["impact_frame"] is not none else "â€”" }}</strong>
+            <strong style="color:var(--red);">{{ phase_timeline["impact_frame"] if phase_timeline["impact_frame"] is not none else "—" }}</strong>
             (highlighted red).
         </p>
     </div>
@@ -298,10 +302,11 @@
         {% set left_cols = [] %}
         {% set right_cols = [] %}
         {% for col in impact_angle_columns %}
-            {% if col.startswith('left_') and col in data["impact_angles"] and data["impact_angles"][col] is not none %}
+            {% set val = data["impact_angles"][col] %}
+            {% if col.startswith('left_') and col in data["impact_angles"] and val is not none and val != 'nan' and (val is not string or (val is string and val != 'nan')) %}
                 {% set _ = left_cols.append(col) %}
             {% endif %}
-            {% if col.startswith('right_') and col in data["impact_angles"] and data["impact_angles"][col] is not none %}
+            {% if col.startswith('right_') and col in data["impact_angles"] and val is not none and val != 'nan' and (val is not string or (val is string and val != 'nan')) %}
                 {% set _ = right_cols.append(col) %}
             {% endif %}
         {% endfor %}
@@ -316,7 +321,7 @@
                 {% for col in left_cols %}
                 <div class="joint-row" data-tooltip="{{ impact_angle_labels[col] }} at moment of ball contact">
                     <span class="joint-name">{{ impact_angle_labels[col] }}</span>
-                    <span class="joint-value" style="color:var(--accent);">{{ "%.1f"|format(data["impact_angles"][col]) }}Â°</span>
+                    <span class="joint-value" style="color:var(--accent);">{% set val = data["impact_angles"][col] %}{% if val is not none and val != 'nan' %}{{ "%.1f"|format(val) }}°{% else %}—{% endif %}</span>
                 </div>
                 {% endfor %}
             </div>
@@ -328,14 +333,14 @@
                 {% for col in right_cols %}
                 <div class="joint-row" data-tooltip="{{ impact_angle_labels[col] }} at moment of ball contact">
                     <span class="joint-name">{{ impact_angle_labels[col] }}</span>
-                    <span class="joint-value" style="color:var(--accent);">{{ "%.1f"|format(data["impact_angles"][col]) }}Â°</span>
+                    <span class="joint-value" style="color:var(--accent);">{% set val = data["impact_angles"][col] %}{% if val is not none and val != 'nan' %}{{ "%.1f"|format(val) }}°{% else %}—{% endif %}</span>
                 </div>
                 {% endfor %}
             </div>
         </div>
         <p class="small faint" style="margin-top:12px;">
             <i class="fas fa-circle-info" style="font-size:0.7rem;"></i>
-            Joint angles at the instant of ball contact, in degrees.
+            Joint angles at the instant of ball contact, in degrees. — indicates unavailable data.
         </p>
         {% endif %}
     </div>
@@ -447,11 +452,13 @@
 <!-- ================= 6. DETAILED ANALYSIS ================= -->
 {% if charts or (ml_insights and ml_insights["available"]) or data["features"] %}
 <div class="card">
-    <div class="card-header">
+    <div class="card-header" onclick="toggleSection('detailed-analysis')" style="cursor:pointer;">
         <span class="card-icon ic-cyan"><i class="fas fa-chart-area"></i></span>
         Detailed Analysis
+        <i class="fas fa-chevron-down" id="detailed-analysis-chevron" style="margin-left:auto;transition:transform 0.2s;"></i>
     </div>
-
+    <div id="detailed-analysis" class="section-detail" style="display:none;">
+    
     <div class="tabs">
         {% if charts %}
         <button class="tab active" data-target="ov-tab"><i class="fas fa-chart-bar" style="font-size:0.8rem;"></i> Overview</button>
@@ -510,15 +517,15 @@
         <div class="ml-grid" style="margin-bottom:16px;">
             <div class="ml-card">
                 <div class="ml-label">Dataset Size</div>
-                <div class="ml-value">{{ ml_insights["dataset_size"] if ml_insights["dataset_size"] is not none else "â€”" }} <span style="font-size:0.65em;color:var(--text-3);">videos</span></div>
+                <div class="ml-value">{{ ml_insights["dataset_size"] if ml_insights["dataset_size"] is not none else "—" }} <span style="font-size:0.65em;color:var(--text-3);">videos</span></div>
             </div>
             <div class="ml-card">
                 <div class="ml-label">Shot Classes</div>
-                <div class="ml-value">{{ ml_insights["n_classes"] if ml_insights["n_classes"] is not none else "â€”" }}</div>
+                <div class="ml-value">{{ ml_insights["n_classes"] if ml_insights["n_classes"] is not none else "—" }}</div>
             </div>
             <div class="ml-card">
                 <div class="ml-label">Best Model (macro F1)</div>
-                <div class="ml-value">{{ ml_insights["best_model"] if ml_insights["best_model"] else "â€”" }}</div>
+                <div class="ml-value">{{ ml_insights["best_model"] if ml_insights["best_model"] else "—" }}</div>
             </div>
             <div class="ml-card">
                 <div class="ml-label">Evaluation</div>
@@ -526,7 +533,7 @@
             </div>
             <div class="ml-card" style="border-color:rgba(255,184,77,0.3);">
                 <div class="ml-label">LOOCV Accuracy</div>
-                <div class="ml-value" style="color:var(--amber);">{{ ml_insights["accuracy"] if ml_insights["accuracy"] else "â€”" }}</div>
+                <div class="ml-value" style="color:var(--amber);">{{ ml_insights["accuracy"] if ml_insights["accuracy"] else "—" }}</div>
             </div>
         </div>
 
@@ -582,7 +589,7 @@
         </details>
     </div>
     {% endif %}
-</div>
+    </div>
 {% endif %}
 
 <!-- ================= 7. RECENTLY PROCESSED ================= -->
