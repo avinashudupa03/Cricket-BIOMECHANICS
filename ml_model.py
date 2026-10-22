@@ -57,6 +57,7 @@ SUPPORTED_SHOT_TYPES = (
     "drive",
     "flick",
     "pull shot",
+    "lofted",
     UNKNOWN,
 )
 

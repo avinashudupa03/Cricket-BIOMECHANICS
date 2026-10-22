@@ -42,6 +42,21 @@ def _safe_log(a, b):
     )
 
 
+def _has_col(df, col):
+    """Check if column exists in dataframe and has any non-NaN values."""
+    if col not in df.columns:
+        return False
+    # Check if column has at least one non-NaN value
+    return df[col].notna().any()
+
+
+def _safe_get(df, col, default=np.nan):
+    """Safely get column from dataframe, returning default if missing or all NaN."""
+    if not _has_col(df, col):
+        return pd.Series(default, index=df.index)
+    return df[col]
+
+
 def engineer(df):
     df = df.copy()
     helpers = {}
@@ -51,9 +66,14 @@ def engineer(df):
     # ------------------------------------------------------------------
     for joint in JOINTS:
         l, r = _pair_cols(joint, "angle_at_impact")
-        helpers[f"{joint}_symmetry_diff_at_impact"] = (df[l] - df[r]).abs()
+        l_series = _safe_get(df, l)
+        r_series = _safe_get(df, r)
+        helpers[f"{joint}_symmetry_diff_at_impact"] = (l_series - r_series).abs()
+        
         l, r = _pair_cols(joint, "angle_mean")
-        helpers[f"{joint}_symmetry_diff_mean"] = (df[l] - df[r]).abs()
+        l_series = _safe_get(df, l)
+        r_series = _safe_get(df, r)
+        helpers[f"{joint}_symmetry_diff_mean"] = (l_series - r_series).abs()
 
     # ------------------------------------------------------------------
     # 2. Angle ranges per joint (max - min).
@@ -62,27 +82,41 @@ def engineer(df):
         for side in ["left", "right"]:
             cmin = f"{side}_{joint}_angle_min"
             cmax = f"{side}_{joint}_angle_max"
-            helpers[f"{side}_{joint}_angle_range"] = df[cmax] - df[cmin]
+            if _has_col(df, cmin) and _has_col(df, cmax):
+                helpers[f"{side}_{joint}_angle_range"] = df[cmax] - df[cmin]
+            else:
+                helpers[f"{side}_{joint}_angle_range"] = pd.Series(np.nan, index=df.index)
 
     for joint in JOINTS:
         l = f"left_{joint}_angle_range"
         r = f"right_{joint}_angle_range"
-        helpers[f"{joint}_angle_range_bilateral"] = (helpers[l] + helpers[r]) / 2.0
+        if l in helpers and r in helpers:
+            helpers[f"{joint}_angle_range_bilateral"] = (helpers[l] + helpers[r]) / 2.0
+        elif l in helpers:
+            helpers[f"{joint}_angle_range_bilateral"] = helpers[l]
+        elif r in helpers:
+            helpers[f"{joint}_angle_range_bilateral"] = helpers[r]
+        else:
+            helpers[f"{joint}_angle_range_bilateral"] = pd.Series(np.nan, index=df.index)
 
     # ------------------------------------------------------------------
     # 3. Aggregate limb mobility.
     # ------------------------------------------------------------------
     helpers["left_arm_mobility"] = (
-        helpers["left_elbow_angle_range"] + helpers["left_shoulder_angle_range"]
+        helpers.get("left_elbow_angle_range", pd.Series(np.nan, index=df.index)) + 
+        helpers.get("left_shoulder_angle_range", pd.Series(np.nan, index=df.index))
     )
     helpers["right_arm_mobility"] = (
-        helpers["right_elbow_angle_range"] + helpers["right_shoulder_angle_range"]
+        helpers.get("right_elbow_angle_range", pd.Series(np.nan, index=df.index)) + 
+        helpers.get("right_shoulder_angle_range", pd.Series(np.nan, index=df.index))
     )
     helpers["left_leg_mobility"] = (
-        helpers["left_knee_angle_range"] + helpers["left_hip_angle_range"]
+        helpers.get("left_knee_angle_range", pd.Series(np.nan, index=df.index)) + 
+        helpers.get("left_hip_angle_range", pd.Series(np.nan, index=df.index))
     )
     helpers["right_leg_mobility"] = (
-        helpers["right_knee_angle_range"] + helpers["right_hip_angle_range"]
+        helpers.get("right_knee_angle_range", pd.Series(np.nan, index=df.index)) + 
+        helpers.get("right_hip_angle_range", pd.Series(np.nan, index=df.index))
     )
     helpers["arm_mobility_bilateral"] = (
         helpers["left_arm_mobility"] + helpers["right_arm_mobility"]
@@ -125,13 +159,15 @@ def engineer(df):
     for joint in JOINTS:
         l = f"left_{joint}_angle_at_impact"
         r = f"right_{joint}_angle_at_impact"
-        helpers[f"{joint}_mean_at_impact"] = (df[l] + df[r]) / 2.0
+        l_series = _safe_get(df, l)
+        r_series = _safe_get(df, r)
+        helpers[f"{joint}_mean_at_impact"] = (l_series + r_series) / 2.0
 
     # ------------------------------------------------------------------
     # 6b. Temporal intensity features.
     # ------------------------------------------------------------------
     def _col(name):
-        return name if name in df.columns else None
+        return name if _has_col(df, name) else None
 
     lel = _col("left_elbow_swing_max_abs_vel_dps")
     rel = _col("right_elbow_swing_max_abs_vel_dps")
@@ -234,11 +270,21 @@ def engineer(df):
     for joint in JOINTS:
         l = f"left_{joint}_angle_range"
         r = f"right_{joint}_angle_range"
-        helpers[f"{joint}_range_asymmetry"] = (helpers[l] - helpers[r]).abs()
-        helpers[f"{joint}_range_asymmetry_ratio"] = _safe_div(
-            (helpers[l] - helpers[r]).abs(),
-            (helpers[l] + helpers[r]) / 2.0 + 1e-9,
-        )
+        if l in helpers and r in helpers:
+            helpers[f"{joint}_range_asymmetry"] = (helpers[l] - helpers[r]).abs()
+            helpers[f"{joint}_range_asymmetry_ratio"] = _safe_div(
+                (helpers[l] - helpers[r]).abs(),
+                (helpers[l] + helpers[r]) / 2.0 + 1e-9,
+            )
+        elif l in helpers:
+            helpers[f"{joint}_range_asymmetry"] = pd.Series(np.nan, index=df.index)
+            helpers[f"{joint}_range_asymmetry_ratio"] = pd.Series(np.nan, index=df.index)
+        elif r in helpers:
+            helpers[f"{joint}_range_asymmetry"] = pd.Series(np.nan, index=df.index)
+            helpers[f"{joint}_range_asymmetry_ratio"] = pd.Series(np.nan, index=df.index)
+        else:
+            helpers[f"{joint}_range_asymmetry"] = pd.Series(np.nan, index=df.index)
+            helpers[f"{joint}_range_asymmetry_ratio"] = pd.Series(np.nan, index=df.index)
 
     # ------------------------------------------------------------------
     # 12. NEW: Log-ratio features (more robust to outliers).
@@ -276,11 +322,13 @@ def engineer(df):
             impact_col = f"{side}_{joint}_angle_at_impact"
             min_col = f"{side}_{joint}_angle_min"
             max_col = f"{side}_{joint}_angle_max"
-            if _col(impact_col) and _col(min_col) and _col(max_col):
+            if _has_col(df, impact_col) and _has_col(df, min_col) and _has_col(df, max_col):
                 helpers[f"{side}_{joint}_impact_normalised"] = _safe_div(
                     df[impact_col] - df[min_col],
                     df[max_col] - df[min_col],
                 )
+            else:
+                helpers[f"{side}_{joint}_impact_normalised"] = pd.Series(np.nan, index=df.index)
 
     # ------------------------------------------------------------------
     # 15. NEW: Stance and stride descriptors.

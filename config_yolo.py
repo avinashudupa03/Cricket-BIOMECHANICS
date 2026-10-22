@@ -75,11 +75,19 @@ YOLO_VERBOSE = False
 # Centralized ROI configuration dictionary (easy to modify/override)
 # Wider default ROI to handle different camera angles and batsman movement
 # Can be overridden via command line: --roi x1 y1 x2 y2 (normalized 0-1)
+# 
+# CAMERA GEOMETRY NOTES:
+# - The camera is positioned behind the bowler, looking towards the batsman at the far end
+# - The batsman is at the far end of the pitch (smaller in frame, upper-middle region)
+# - The non-striker is in the foreground (larger, lower in frame)
+# - Wicketkeeper is behind the stumps (y > 0.75 typically)
+# - Bowler runs in from top of frame
+# - This ROI targets the batting crease area at the far end
 BATSMAN_ROI = {
-    "x1": 0.30,   # Left boundary (normalized) - wider to capture full stance
-    "y1": 0.10,   # Top boundary (normalized) - higher to capture backlift
-    "x2": 0.75,   # Right boundary (normalized) - wider for different shot types
-    "y2": 0.85,   # Bottom boundary (normalized) - lower to capture follow-through
+    "x1": 0.25,   # Left boundary - covers off-side to leg-side at batting crease
+    "y1": 0.05,   # Top boundary - captures full backlift height
+    "x2": 0.70,   # Right boundary - excludes deep fielders/background
+    "y2": 0.65,   # Bottom boundary - stops before non-striker/foreground zone
 }
 
 # Backwards-compatible individual constants (derived from BATSMAN_ROI)
@@ -140,18 +148,21 @@ TEMPORAL_WEIGHT = 0.10            # Temporal consistency
 MOVEMENT_WEIGHT = 0.10            # Movement pattern consistency
 CONTINUITY_WEIGHT = 0.55          # Physical-person continuity is key
 
-# Position priors - focused on batting crease
-BATTING_REGION_CENTER = (0.39, 0.55)  # Normalized (x, y) - batsman typically center, slightly higher
-BATTING_REGION_SIGMA = (0.08, 0.25)   # Slightly wider for shot variations
+# Position priors - focused on batting crease at far end of pitch
+# The batsman at the far end appears in the upper-middle portion of the frame
+BATTING_REGION_CENTER = (0.475, 0.35)  # Normalized (x, y) - batsman typically center, higher up (far end)
+BATTING_REGION_SIGMA = (0.15, 0.15)    # Tighter region around batting crease
 
 # Body proportions (normalized by bbox height)
-MIN_BATSMAN_BBOX_HEIGHT = 0.08      # Reduced - allow smaller batsmen
-IDEAL_BATSMAN_BBOX_HEIGHT = 0.35    # Ideal normalized bbox height
+MIN_BATSMAN_BBOX_HEIGHT = 0.05       # Reduced - allow smaller batsmen at far end
+IDEAL_BATSMAN_BBOX_HEIGHT = 0.20     # Ideal normalized bbox height for far-end batsman
 
-# Wicketkeeper/Non-striker rejection zones
-WICKETKEEPER_Y_MIN = 0.65           # Wicketkeeper typically behind stumps (y > 0.60)
-NON_STRIKER_X_MAX = 0.25            # Non-striker at other end (x < 0.35)
-NON_STRIKER_Y_MIN = 0.50            # Non-striker also often crouched
+# Wicketkeeper/Non-striker rejection zones - STRICTER
+# Wicketkeeper behind stumps (y > 0.70)
+WICKETKEEPER_Y_MIN = 0.70
+# Non-striker at other end - foreground, lower in frame, often left side
+NON_STRIKER_X_MAX = 0.40             # Non-striker typically left of center
+NON_STRIKER_Y_MIN = 0.55             # Non-striker in lower portion (foreground)
 
 # Confidence thresholds
 BATSMAN_CONFIDENCE_THRESHOLD = 0.02  # Reduced - allow lower scores

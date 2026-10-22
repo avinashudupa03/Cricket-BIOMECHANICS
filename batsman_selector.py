@@ -456,52 +456,73 @@ class BatsmanSelector:
         return scores, continuity_scores
     
     def _compute_pose_score(self, track: PersonTrack) -> float:
-        """Compute pose-proxy score from bbox geometry (cricket-specific heuristics)."""
+        """Compute pose-proxy score from bbox geometry (cricket-specific heuristics).
+        
+        CRITICAL: This runs on tracks ALREADY filtered by ROI, but we still need
+        strong rejection of any non-striker/wicketkeeper that might slip through.
+        """
         score = 0.0
         
-        # 1. Aspect ratio: batsmen are typically upright (tall, not too wide)
+        if track.center is None:
+            return 0.0
+        
+        cx, cy = track.center
+        
+        # HARD REJECTION ZONES - return very low score immediately
+        # Wicketkeeper zone (behind stumps, lower portion)
+        if cy > WICKETKEEPER_Y_MIN:
+            return -1.0  # Hard reject
+        
+        # Non-striker zone (foreground, left side, lower portion)
+        if cx < NON_STRIKER_X_MAX and cy > NON_STRIKER_Y_MIN:
+            return -1.0  # Hard reject
+        
+        # Bowler zone (top of frame, running in)
+        if cy < 0.15:
+            return -0.5  # Soft reject
+        
+        # 1. Aspect ratio: batsmen at far end are typically upright but smaller
         if track.bbox_height > 0 and track.bbox_width > 0:
             aspect = track.bbox_height / track.bbox_width
-            if aspect >= 1.8:
+            if aspect >= 1.5:
                 score += 0.3
-            elif aspect >= 1.4:
+            elif aspect >= 1.2:
                 score += 0.2
             elif aspect >= 1.0:
                 score += 0.1
         
-        # 2. Vertical position: batsman typically in upper-middle of frame
-        if track.center is not None:
-            cy = track.center[1]
-            if 0.25 <= cy <= 0.55:
-                score += 0.25
-            elif 0.20 <= cy <= 0.65:
-                score += 0.15
-            elif 0.15 <= cy <= 0.75:
-                score += 0.05
-            
-            # Wicketkeeper penalty
-            if cy > WICKETKEEPER_Y_MIN:
-                if track.bbox_height > 0 and track.bbox_width > 0:
-                    aspect = track.bbox_height / track.bbox_width
-                    if aspect < 1.6:
-                        score -= 0.3
+        # 2. Vertical position: batsman at far end is in UPPER portion (y ~ 0.2-0.5)
+        if 0.15 <= cy <= 0.50:
+            score += 0.3
+        elif 0.10 <= cy <= 0.55:
+            score += 0.2
+        elif 0.05 <= cy <= 0.60:
+            score += 0.1
+        else:
+            score -= 0.2  # Penalty for being too low (non-striker zone)
         
-        # 3. Horizontal position: batsman typically center-right
-        if track.center is not None:
-            cx = track.center[0]
-            if 0.35 <= cx <= 0.65:
-                score += 0.2
-            elif 0.25 <= cx <= 0.75:
-                score += 0.1
-            
-            # Non-striker penalty
-            if cx < NON_STRIKER_X_MAX and track.center[1] > NON_STRIKER_Y_MIN:
-                score -= 0.25
+        # 3. Horizontal position: batsman typically center (0.3-0.65)
+        if 0.30 <= cx <= 0.65:
+            score += 0.25
+        elif 0.25 <= cx <= 0.70:
+            score += 0.15
+        elif 0.20 <= cx <= 0.75:
+            score += 0.05
+        else:
+            score -= 0.15  # Penalty for being too far left/right
         
-        # 4. Size: batsman usually larger (closer to camera)
+        # 4. Size: batsman at far end is SMALLER (further from camera)
+        # Don't reward large size - that's the non-striker
         if track.bbox_height >= MIN_BATSMAN_BBOX_HEIGHT:
+            # Normalize to ideal height for far-end batsman
             size_norm = clamp(track.bbox_height / IDEAL_BATSMAN_BBOX_HEIGHT)
-            score += 0.25 * size_norm
+            score += 0.2 * size_norm
+        else:
+            score -= 0.1  # Too small
+        
+        # 5. Position prior: gaussian around batting region center
+        pos_prior = gaussian_prior(track.center, BATTING_REGION_CENTER, BATTING_REGION_SIGMA)
+        score += 0.25 * pos_prior
         
         return clamp(score)
     

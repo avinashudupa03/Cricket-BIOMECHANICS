@@ -365,13 +365,20 @@ class YOLOGuidedPoseExtractor:
         return np.array(keep_mask)
 
     def _yolo_detect_track(self, frame, timestamp_ms):
-        """Run YOLO detection + tracking on FULL FRAME, then filter by ROI overlap.
+        """Run YOLO detection + tracking on ROI CROP only.
         
-        Running on full frame gives stable track IDs across the entire video.
+        Running on the batting ROI crop:
+        - Excludes non-striker, bowler, wicketkeeper, umpire from detection entirely
+        - Gives stable track IDs within the batting region
+        - More efficient (smaller image)
         """
-        # 1. Run YOLO tracking on the FULL FRAME for stable track IDs
+        # 1. Crop frame to batsman ROI with padding
+        roi_crop, crop_offset, roi_bbox = self._crop_to_roi(frame)
+        crop_x1, crop_y1 = crop_offset
+        
+        # 2. Run YOLO tracking on the ROI CROP
         results = self.yolo.track(
-            frame,
+            roi_crop,
             conf=YOLO_CONF_THRESHOLD,
             classes=[YOLO_PERSON_CLASS],
             tracker=YOLO_TRACKER_CONFIG,
@@ -383,22 +390,13 @@ class YOLOGuidedPoseExtractor:
         
         if detections is not None and detections.id is not None:
             track_ids = detections.id.cpu().numpy().astype(int)
-            boxes_full = detections.xyxy.cpu().numpy()  # Already in full-frame coordinates
+            boxes_crop = detections.xyxy.cpu().numpy()  # In crop coordinates
             confs = detections.conf.cpu().numpy()
             
-            # 2. Filter by ROI overlap (reject wicketkeeper, bowler, umpire, non-striker)
-            roi_x1 = int(BATSMAN_ROI["x1"] * frame.shape[1])
-            roi_y1 = int(BATSMAN_ROI["y1"] * frame.shape[0])
-            roi_x2 = int(BATSMAN_ROI["x2"] * frame.shape[1])
-            roi_y2 = int(BATSMAN_ROI["y2"] * frame.shape[0])
-            roi_bbox = (roi_x1, roi_y1, roi_x2, roi_y2)
-            
-            keep_mask = self._filter_detections_by_roi_overlap(boxes_full, roi_bbox)
+            # 3. Convert boxes from crop coordinates to full-frame coordinates
+            boxes_full = self._convert_roi_boxes_to_full_frame(boxes_crop, crop_offset)
             
             for i, track_id in enumerate(track_ids):
-                if not keep_mask[i]:
-                    continue  # Skip detections outside ROI
-                    
                 x1, y1, x2, y2 = boxes_full[i]
                 conf = float(confs[i])
                 

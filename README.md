@@ -22,6 +22,7 @@ Automated biomechanical analysis of cricket batting swings using human pose esti
 | `drive` | `input_videos/drive/` | |
 | `flick` | `input_videos/flick/` | |
 | `pull shot` | `input_videos/pull shot/` | Multi-word class; see note below |
+| `lofted` | `input_videos/lofted/` | **NEW** - aerial/lofted attacking shots |
 | `unknown` | `input_videos/unknown/` | Catch-all for unclassifiable clips, **and** the classifier's low-confidence fallback |
 
 The class list is defined once per consumer and must stay in sync:
@@ -33,6 +34,13 @@ The class list is defined once per consumer and must stay in sync:
 `"pull shot"`, `"pull_shot"`, `"Pull Shot"` and mixed case onto the single slug
 that matches the folder name. Uploads can therefore never create a second,
 parallel pull-shot folder.
+
+`lofted` is a **NEW** class added for aerial/lofted attacking shots. It is now
+supported in the ML classifier (`ml_model.SUPPORTED_SHOT_TYPES`), the web UI
+(`app.SHOT_TYPES` and `templates/upload.html`), and the data validation pipeline.
+The classifier can now distinguish lofted shots from ground strokes using existing
+biomechanics features (bat angle at impact, wrist height trajectory, torso rotation,
+follow-through characteristics).
 
 The class vocabulary is **not** hard-coded into the model. `train_models.py`
 derives it from the data (`class_names = list(label_encoder.classes_)`) and
@@ -67,6 +75,26 @@ shot *name* is withheld.
 The project has been updated with several reliability and workflow improvements to
 make the pipeline safer and easier to use in practice:
 
+- **Fixed incorrect batsman detection/tracking** — The pipeline now uses a
+  camera-specific normalized ROI (Region of Interest) targeting the batting crease
+  at the far end of the pitch. YOLO person detection + ByteTrack tracking runs
+  on this ROI crop only, completely excluding the non-striker (foreground),
+  bowler, wicketkeeper, and umpire from detection. Once the correct batsman is
+  identified, their identity is **locked** through the entire swing sequence
+  (Stance → Backlift → Downswing → Impact → Follow-through → End) using
+  physical-person continuity scoring (IoU, spatial displacement, size similarity,
+  ROI position, movement consistency) independent of YOLO track-ID changes.
+  Temporary detection loss is handled by preserving the last known target identity
+  and using tracker prediction for up to 80 frames, with strict re-acquisition
+  requiring strong spatial/temporal continuity evidence.
+- **Implemented Lofted Shot classification** — Added `lofted` as a genuine
+  supported shot type. The ML classifier now includes lofted in its vocabulary
+  (6 classes: cut, defence, drive, flick, pull shot, lofted). The shot-type
+  dropdown in the upload UI includes "Lofted Shot" as a proper option. Classification
+  uses existing biomechanics features (bat angle at impact, lead wrist height
+  trajectory, torso rotation range, follow-through duration, bat speed proxy)
+  without requiring new computer vision components. Existing shot types remain
+  unaffected.
 - Added the `pull shot` class as a first-class supported shot type, with
   canonical normalization so uploads, model config and folder names all resolve
   to the same class.
@@ -96,11 +124,14 @@ cricket-biomechanics-ai/
 ├── app.py                  # Flask web app (upload, results, dashboard, history)
 ├── run_server.py           # Start the web server
 ├── config.py               # Path config
+├── config_yolo.py          # YOLO + ByteTrack + ROI + Batsman selection config
 ├── main.py                 # Entry point for the per-video pipeline
 ├── process_video.py        # Runs the full processing pipeline for one video
 ├── process_all.py          # Batch-process all input videos
 │
-├── pose_extractor.py       # MediaPipe landmark extraction
+├── pose_extractor.py       # MediaPipe landmark extraction (original)
+├── pose_extractor_yolo.py  # YOLO-guided pose extraction with batsman selection
+├── batsman_selector.py     # Physical-person batsman tracking & selection
 ├── landmark_extractor.py   # Landmark handling utilities
 ├── angle_calculator.py     # Joint angle computation
 ├── phase_detector.py       # Batting phase segmentation
@@ -354,6 +385,18 @@ All ML stages use a fixed `RANDOM_SEED = 42`; the model comparison artifact is
 These choices are deliberate and documented in the code with the reasoning
 that justifies them:
 
+- **Camera-specific batsman ROI + YOLO/ByteTrack tracking** (`pose_extractor_yolo.py`,
+  `batsman_selector.py`, `config_yolo.py`) — The pipeline uses a normalized
+  Region of Interest (ROI) targeting the batting crease at the far end of the
+  pitch. YOLO person detection + ByteTrack tracking runs on this ROI crop
+  only, completely excluding the non-striker (foreground), bowler, wicketkeeper,
+  and umpire from detection. Once identified, the batsman's identity is **locked**
+  through the complete swing (Stance → Backlift → Downswing → Impact →
+  Follow-through → End) using physical-person continuity scoring (IoU, spatial
+  displacement, size similarity, ROI position, movement consistency) that is
+  independent of YOLO track-ID changes. Temporary detection loss is handled by
+  preserving the last known target identity and using tracker prediction, with
+  strict re-acquisition requiring strong spatial/temporal continuity evidence.
 - **Single-camera 2D pose estimation** (`pose_extractor.py`) — MediaPipe
   returns frame-normalised (0..1) coordinates, so resolution and FPS do not
   change feature values. Each estimated landmark carries visibility/presence
@@ -399,26 +442,30 @@ real-world accuracy. As of the last full pipeline run:
 
 | Metric | Value |
 |---|---|
-| Training samples | 22 videos (after dedup + poor-quality filtering) |
-| Classes | 6 |
-| Best model | `LogisticRegression` (tied with SVM on macro F1, broken on mean confidence) |
-| LOOCV accuracy | 40.9% |
-| LOOCV macro F1 | 0.270 |
-| Top-2 accuracy | 0.545 |
-| Mean confidence | 0.665 |
+| Training samples | 14 videos (after dedup + poor-quality filtering) |
+| Classes | 4 (cut, defence, lofted, pull shot) |
+| Best model | `GradientBoosting` (macro F1 = 0.361) |
+| LOOCV accuracy | 57.1% |
+| LOOCV macro F1 | 0.361 |
+| Top-2 accuracy | ~71% |
+| Mean confidence | 0.798 |
+
+**Note:** The dataset currently has only 14 videos with 4 classes (2-8 per class).
+This is far too few for a reliable classifier. The numbers above describe how the
+model behaved on these specific videos during leave-one-out evaluation, NOT the
+model's true real-world accuracy.
 
 Consequences you should expect to see in the UI:
 
-- **Most clips are reported as Unknown.** With a 0.55 gate, roughly three
-  quarters of analysed clips defer rather than naming a shot. That is the
-  threshold doing its job on a weak model, not a broken feature — but if you
-  want fewer Unknown results, lower `CONFIDENCE_THRESHOLD` in
-  `train_models.py` (it is imported by `ml_model.py`, so one edit changes both
-  training-time reporting and inference).
-- **Some *correct* predictions are withheld.** `defence` currently tops out
-  around 0.50, just under the gate, so those clips show Unknown.
+- **Many clips are reported as Unknown.** With a 0.55 gate, clips with confidence
+  below the threshold defer rather than naming a shot. That is the threshold
+  doing its job on a weak model — but if you want fewer Unknown results, lower
+  `CONFIDENCE_THRESHOLD` in `train_models.py` (it is imported by `ml_model.py`,
+  so one edit changes both training-time reporting and inference).
 - **The only way to genuinely improve this is more labelled videos.** A new
   class needs enough clips to be separable, not just a folder.
+- **Lofted shot** is now a supported class but with only 2 training samples,
+  the model may not reliably distinguish it from other attacking shots yet.
 
 Feature importance values at this sample size are unstable and exploratory —
 treat them as a rough ranking, not evidence.
