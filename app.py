@@ -763,10 +763,45 @@ def results_page(video_name):
                     impact_frame = i
                     break
             
+            # Calculate phase percentages
+            phase_order = ['Stance', 'Backlift', 'Downswing', 'Impact', 'Follow-through']
+            phase_percentages = {}
+            for seg in segments:
+                phase_name = seg['phase']
+                frame_count = seg['end'] - seg['start'] + 1
+                pct = round(frame_count / total_frames * 100, 1)
+                if phase_name in phase_percentages:
+                    phase_percentages[phase_name] += pct
+                else:
+                    phase_percentages[phase_name] = pct
+            
+            # Add percentage to each segment
+            for seg in segments:
+                frame_count = seg['end'] - seg['start'] + 1
+                seg['frame_count'] = frame_count
+                seg['percentage'] = round(frame_count / total_frames * 100, 1)
+            
+            # Also create a summary list in phase_order for template
+            phase_summary = []
+            for p in phase_order:
+                if p in phase_percentages:
+                    # Find the segment for this phase to get frame range
+                    seg = next((s for s in segments if s['phase'] == p), None)
+                    if seg:
+                        phase_summary.append({
+                            'phase': p,
+                            'percentage': phase_percentages[p],
+                            'frame_count': seg['frame_count'],
+                            'start': seg['start'],
+                            'end': seg['end']
+                        })
+            
             phase_timeline = {
                 'total_frames': total_frames,
                 'segments': segments,
-                'impact_frame': impact_frame
+                'impact_frame': impact_frame,
+                'phase_percentages': phase_percentages,
+                'phase_summary': phase_summary
             }
     
     # Impact angles

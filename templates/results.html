@@ -262,29 +262,87 @@
             'Follow-through': '#a78bfa'
         } %}
         {% set phase_order = ['Stance', 'Backlift', 'Downswing', 'Impact', 'Follow-through'] %}
-        <div class="phase-timeline">
-            {% for phase_name in phase_order %}
-                {% set segs = phase_timeline["segments"] | selectattr('phase', 'equalto', phase_name) | list %}
-                {% for seg in segs %}
-                {% set w = ((seg["end"] - seg["start"] + 1) / total * 100) %}
-                <div class="phase-segment{% if seg['phase'] == 'Impact' %} impact-segment{% endif %}"
-                     style="width:{{ w }}%;background:{{ colors.get(seg['phase'], '#888') }};"
-                     data-tooltip="{{ seg['phase'] }}: frames {{ seg['start'] }}\u2013{{ seg['end'] }} ({{ seg['end'] - seg['start'] + 1 }} frames)">
-                    {{ seg["phase"] }}
-                    <span class="phase-frames">{{ seg["start"] }}{% if seg["end"] != seg["start"] %}\u2013{{ seg["end"] }}{% endif %}</span>
-                </div>
+        
+        <!-- Visual timeline with percentage labels -->
+        <div class="phase-timeline-wrapper" style="margin-bottom:16px;">
+            <div class="phase-timeline-bar" style="position:relative; height:48px; border-radius:8px; overflow:hidden; background:var(--bg-2);">
+                {% for phase_name in phase_order %}
+                    {% set segs = phase_timeline["segments"] | selectattr('phase', 'equalto', phase_name) | list %}
+                    {% for seg in segs %}
+                    <div class="phase-segment{% if seg['phase'] == 'Impact' %} impact-segment{% endif %}"
+                         style="width:{{ seg['percentage'] }}%;background:{{ colors.get(seg['phase'], '#888') }};height:100%;float:left;display:flex;align-items:center;justify-content:center;position:relative;"
+                         data-tooltip="{{ seg['phase'] }}: {{ seg['percentage'] }}% • Frames {{ seg['start'] }}–{{ seg['end'] }} ({{ seg['frame_count'] }} frames)">
+                        <span class="phase-label" style="color:white;font-weight:600;font-size:0.8rem;text-shadow:0 1px 2px rgba(0,0,0,0.5);white-space:nowrap;">
+                            {{ seg['phase'] }} {{ seg['percentage'] }}%
+                        </span>
+                    </div>
+                    {% endfor %}
                 {% endfor %}
-            {% endfor %}
+            </div>
         </div>
-        <div class="phase-legend">
-            {% for p in phase_order %}
-            <span class="phase-legend-item"><span class="phase-legend-dot" style="background:{{ colors[p] }}"></span>{{ p }}</span>
-            {% endfor %}
+        
+        <!-- Phase percentage summary table -->
+        <div class="phase-summary" style="margin-top:16px;">
+            <table class="phase-summary-table" style="width:100%;border-collapse:collapse;font-size:0.9rem;">
+                <thead>
+                    <tr style="border-bottom:2px solid var(--border-soft);">
+                        <th style="text-align:left;padding:8px 12px;">Phase</th>
+                        <th style="text-align:center;padding:8px 12px;">Percentage</th>
+                        <th style="text-align:center;padding:8px 12px;">Frames</th>
+                        <th style="text-align:center;padding:8px 12px;">Frame Range</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if phase_timeline["phase_summary"] %}
+                        {% for p in phase_timeline["phase_summary"] %}
+                        <tr style="border-bottom:1px solid var(--border-soft);">
+                            <td style="padding:10px 12px;">
+                                <span style="display:inline-flex;align-items:center;gap:8px;">
+                                    <span class="phase-legend-dot" style="width:12px;height:12px;border-radius:50%;background:{{ colors[p['phase']] }};"></span>
+                                    <strong>{{ p['phase'] }}</strong>
+                                </span>
+                            </td>
+                            <td style="text-align:center;padding:10px 12px;font-weight:600;color:{{ colors[p['phase']] }};">{{ "%.1f"|format(p['percentage']) }}%</td>
+                            <td style="text-align:center;padding:10px 12px;font-family:monospace;">{{ p['frame_count'] }}</td>
+                            <td style="text-align:center;padding:10px 12px;font-family:monospace;color:var(--text-3);">{{ p['start'] }}–{{ p['end'] }}</td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        {% for phase_name in phase_order %}
+                            {% set segs = phase_timeline["segments"] | selectattr('phase', 'equalto', phase_name) | list %}
+                            {% for seg in segs %}
+                            <tr style="border-bottom:1px solid var(--border-soft);">
+                                <td style="padding:10px 12px;">
+                                    <span style="display:inline-flex;align-items:center;gap:8px;">
+                                        <span class="phase-legend-dot" style="width:12px;height:12px;border-radius:50%;background:{{ colors[seg['phase']] }};"></span>
+                                        <strong>{{ seg['phase'] }}</strong>
+                                    </span>
+                                </td>
+                                <td style="text-align:center;padding:10px 12px;font-weight:600;color:{{ colors[seg['phase']] }};">{{ seg['percentage'] }}%</td>
+                                <td style="text-align:center;padding:10px 12px;font-family:monospace;">{{ seg['frame_count'] }}</td>
+                                <td style="text-align:center;padding:10px 12px;font-family:monospace;color:var(--text-3);">{{ seg['start'] }}–{{ seg['end'] }}</td>
+                            </tr>
+                            {% endfor %}
+                        {% endfor %}
+                    {% endif %}
+                    <!-- Total row -->
+                    <tr style="font-weight:bold;background:var(--bg-1);">
+                        <td style="padding:10px 12px;">Total</td>
+                        <td style="text-align:center;padding:10px 12px;">
+                            {{ "%.1f"|format(phase_timeline["phase_summary"] | map(attribute='percentage') | sum if phase_timeline["phase_summary"] else 
+                                (phase_timeline["segments"] | map(attribute='percentage') | sum)) }}%
+                        </td>
+                        <td style="text-align:center;padding:10px 12px;font-family:monospace;">{{ total }}</td>
+                        <td style="text-align:center;padding:10px 12px;font-family:monospace;color:var(--text-3);">0–{{ total - 1 }}</td>
+                    </tr>
+                </tbody>
+            </table>
         </div>
+        
         <p class="small faint" style="margin-top:12px;">
             Impact detected at frame
             <strong style="color:var(--red);">{{ phase_timeline["impact_frame"] if phase_timeline["impact_frame"] is not none else "—" }}</strong>
-            (highlighted red).
+            (highlighted red in timeline).
         </p>
     </div>
 </div>

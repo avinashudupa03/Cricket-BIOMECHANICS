@@ -6,7 +6,7 @@ Automated biomechanical analysis of cricket batting swings using human pose esti
 
 - **Pose estimation** from video frames via MediaPipe/Ultralytics-powered landmark extraction.
 - **Joint angle tracking** for elbows, knees, shoulders, and hips across the whole swing.
-- **Batting phase detection** — Stance, Backlift, Downswing, Impact, and Follow-through.
+- **Batting phase detection** — Stance, Backlift, Downswing, Impact, and Follow-through — with **percentage-based phase timeline** showing each phase's proportion of the total analyzed frames.
 - **Biomechanics metrics** — impact frame/time, downswing & follow-through durations, and movement scores.
 - **Shot rating (0–10)** — a deterministic, individually weighted rating of shot quality with a confidence score; missing metrics are reported, never invented.
 - **Shot classification (ML)** using engineered features with Leave-One-Out Cross-Validation. A clip the model is not confident about is reported as **Unknown** rather than forced into a named shot.
@@ -95,6 +95,14 @@ make the pipeline safer and easier to use in practice:
   trajectory, torso rotation range, follow-through duration, bat speed proxy)
   without requiring new computer vision components. Existing shot types remain
   unaffected.
+- **Added Shot Phase Timeline with percentage breakdown** — The results page now
+  displays a visual phase timeline where each phase (Stance, Backlift, Downswing,
+  Impact, Follow-through) is shown as a percentage of the total analyzed frames.
+  A summary table provides frame counts, frame ranges, and percentages for each
+  phase, with a total row summing to ~100%. Percentages are calculated dynamically
+  from actual phase boundaries: `phase_percentage = phase_frame_count / total_analyzed_frames * 100`.
+  This replaces the previous frame-range-only display and works correctly across
+  videos of different lengths.
 - Added the `pull shot` class as a first-class supported shot type, with
   canonical normalization so uploads, model config and folder names all resolve
   to the same class.
