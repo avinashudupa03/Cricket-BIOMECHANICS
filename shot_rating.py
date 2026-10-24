@@ -212,45 +212,318 @@ def _symmetry(left: Optional[float], right: Optional[float],
 
 
 # ---------------------------------------------------------------------------
+# Shot-type specific scoring parameters
+# ---------------------------------------------------------------------------
+
+# Shot type groupings for parameter lookup
+SHOT_TYPE_GROUPS = {
+    "defence": ["defence", "block", "leave"],
+    "drive": ["drive", "straight drive", "cover drive", "on drive", "off drive", "square drive"],
+    "cut": ["cut", "late cut", "square cut"],
+    "pull": ["pull", "pull shot", "hook", "hook shot"],
+    "flick": ["flick", "leg glance", "glance"],
+    "sweep": ["sweep", "reverse sweep", "paddle sweep"],
+    "lofted": ["lofted", "lofted drive", "aerial", "slog"],
+}
+
+# Per-shot-type scoring parameters for more accurate evaluation
+SHOT_TYPE_PARAMS = {
+    "default": {
+        "bat_angle_centre": 160.0,
+        "bat_angle_span": 45.0,
+        "contact_elbow_centre": 160.0,
+        "contact_elbow_span": 50.0,
+        "contact_shoulder_centre": 65.0,
+        "contact_shoulder_span": 45.0,
+        "timing_impact_frames_good": 8.0,
+        "timing_impact_frames_poor": 1.0,
+        "timing_ratio_good": 4.0,
+        "timing_ratio_poor": 1.0,
+        "stride_front_centre": 1.5,
+        "stride_front_span": 1.2,
+        "stride_back_good": 0.5,
+        "stride_back_poor": 0.05,
+        "follow_ms_centre": 900.0,
+        "follow_ms_span": 700.0,
+        "follow_ratio_good": 2.5,
+        "follow_ratio_poor": 0.5,
+        "swing_downswing_good": 450.0,
+        "swing_downswing_poor": 150.0,
+        "power_follow_good": 1500.0,
+        "power_follow_poor": 300.0,
+    },
+    "defence": {
+        "bat_angle_centre": 140.0,    # More compact for defence
+        "bat_angle_span": 40.0,
+        "contact_elbow_centre": 140.0,
+        "contact_elbow_span": 45.0,
+        "contact_shoulder_centre": 55.0,
+        "contact_shoulder_span": 40.0,
+        "timing_impact_frames_good": 6.0,
+        "timing_impact_frames_poor": 1.0,
+        "timing_ratio_good": 3.5,
+        "timing_ratio_poor": 1.0,
+        "stride_front_centre": 0.8,   # Shorter stride for defence
+        "stride_front_span": 0.8,
+        "stride_back_good": 0.3,
+        "stride_back_poor": 0.05,
+        "follow_ms_centre": 500.0,    # Shorter follow-through
+        "follow_ms_span": 400.0,
+        "follow_ratio_good": 1.5,
+        "follow_ratio_poor": 0.3,
+        "swing_downswing_good": 350.0,
+        "swing_downswing_poor": 120.0,
+        "power_follow_good": 800.0,
+        "power_follow_poor": 200.0,
+    },
+    "drive": {
+        "bat_angle_centre": 165.0,    # Full extension for drives
+        "bat_angle_span": 35.0,
+        "contact_elbow_centre": 165.0,
+        "contact_elbow_span": 40.0,
+        "contact_shoulder_centre": 70.0,
+        "contact_shoulder_span": 35.0,
+        "timing_impact_frames_good": 8.0,
+        "timing_impact_frames_poor": 1.0,
+        "timing_ratio_good": 4.5,
+        "timing_ratio_poor": 1.0,
+        "stride_front_centre": 1.8,   # Longer stride for drives
+        "stride_front_span": 1.0,
+        "stride_back_good": 0.5,
+        "stride_back_poor": 0.05,
+        "follow_ms_centre": 1000.0,   # Full follow-through
+        "follow_ms_span": 600.0,
+        "follow_ratio_good": 3.0,
+        "follow_ratio_poor": 0.8,
+        "swing_downswing_good": 400.0,
+        "swing_downswing_poor": 150.0,
+        "power_follow_good": 1800.0,
+        "power_follow_poor": 400.0,
+    },
+    "cut": {
+        "bat_angle_centre": 150.0,    # Horizontal bat
+        "bat_angle_span": 40.0,
+        "contact_elbow_centre": 150.0,
+        "contact_elbow_span": 45.0,
+        "contact_shoulder_centre": 60.0,
+        "contact_shoulder_span": 40.0,
+        "timing_impact_frames_good": 7.0,
+        "timing_impact_frames_poor": 1.0,
+        "timing_ratio_good": 4.0,
+        "timing_ratio_poor": 1.0,
+        "stride_front_centre": 0.5,   # Minimal stride for cut
+        "stride_front_span": 0.6,
+        "stride_back_good": 0.4,
+        "stride_back_poor": 0.05,
+        "follow_ms_centre": 600.0,
+        "follow_ms_span": 500.0,
+        "follow_ratio_good": 2.0,
+        "follow_ratio_poor": 0.4,
+        "swing_downswing_good": 300.0,
+        "swing_downswing_poor": 100.0,
+        "power_follow_good": 1000.0,
+        "power_follow_poor": 300.0,
+    },
+    "pull": {
+        "bat_angle_centre": 130.0,    # Horizontal bat, shorter
+        "bat_angle_span": 45.0,
+        "contact_elbow_centre": 130.0,
+        "contact_elbow_span": 50.0,
+        "contact_shoulder_centre": 55.0,
+        "contact_shoulder_span": 45.0,
+        "timing_impact_frames_good": 6.0,
+        "timing_impact_frames_poor": 1.0,
+        "timing_ratio_good": 3.5,
+        "timing_ratio_poor": 1.0,
+        "stride_front_centre": 0.3,   # Back foot shot
+        "stride_front_span": 0.5,
+        "stride_back_good": 0.6,
+        "stride_back_poor": 0.1,
+        "follow_ms_centre": 700.0,
+        "follow_ms_span": 500.0,
+        "follow_ratio_good": 2.0,
+        "follow_ratio_poor": 0.5,
+        "swing_downswing_good": 250.0,
+        "swing_downswing_poor": 80.0,
+        "power_follow_good": 1200.0,
+        "power_follow_poor": 300.0,
+    },
+    "flick": {
+        "bat_angle_centre": 155.0,
+        "bat_angle_span": 40.0,
+        "contact_elbow_centre": 155.0,
+        "contact_elbow_span": 40.0,
+        "contact_shoulder_centre": 65.0,
+        "contact_shoulder_span": 35.0,
+        "timing_impact_frames_good": 7.0,
+        "timing_impact_frames_poor": 1.0,
+        "timing_ratio_good": 4.0,
+        "timing_ratio_poor": 1.0,
+        "stride_front_centre": 1.0,
+        "stride_front_span": 0.8,
+        "stride_back_good": 0.4,
+        "stride_back_poor": 0.05,
+        "follow_ms_centre": 800.0,
+        "follow_ms_span": 500.0,
+        "follow_ratio_good": 2.5,
+        "follow_ratio_poor": 0.5,
+        "swing_downswing_good": 350.0,
+        "swing_downswing_poor": 120.0,
+        "power_follow_good": 1000.0,
+        "power_follow_poor": 300.0,
+    },
+    "sweep": {
+        "bat_angle_centre": 120.0,    # Very horizontal
+        "bat_angle_span": 50.0,
+        "contact_elbow_centre": 120.0,
+        "contact_elbow_span": 55.0,
+        "contact_shoulder_centre": 50.0,
+        "contact_shoulder_span": 50.0,
+        "timing_impact_frames_good": 6.0,
+        "timing_impact_frames_poor": 1.0,
+        "timing_ratio_good": 3.0,
+        "timing_ratio_poor": 1.0,
+        "stride_front_centre": 0.2,
+        "stride_front_span": 0.4,
+        "stride_back_good": 0.5,
+        "stride_back_poor": 0.1,
+        "follow_ms_centre": 600.0,
+        "follow_ms_span": 500.0,
+        "follow_ratio_good": 1.8,
+        "follow_ratio_poor": 0.4,
+        "swing_downswing_good": 280.0,
+        "swing_downswing_poor": 100.0,
+        "power_follow_good": 800.0,
+        "power_follow_poor": 200.0,
+    },
+    "lofted": {
+        "bat_angle_centre": 155.0,
+        "bat_angle_span": 40.0,
+        "contact_elbow_centre": 155.0,
+        "contact_elbow_span": 45.0,
+        "contact_shoulder_centre": 65.0,
+        "contact_shoulder_span": 40.0,
+        "timing_impact_frames_good": 8.0,
+        "timing_impact_frames_poor": 1.0,
+        "timing_ratio_good": 4.5,
+        "timing_ratio_poor": 1.0,
+        "stride_front_centre": 1.5,
+        "stride_front_span": 1.0,
+        "stride_back_good": 0.5,
+        "stride_back_poor": 0.05,
+        "follow_ms_centre": 1100.0,
+        "follow_ms_span": 700.0,
+        "follow_ratio_good": 3.5,
+        "follow_ratio_poor": 1.0,
+        "swing_downswing_good": 400.0,
+        "swing_downswing_poor": 150.0,
+        "power_follow_good": 2000.0,
+        "power_follow_poor": 500.0,
+    },
+}
+
+
+def _get_shot_params(shot_type: str) -> Dict:
+    """Get scoring parameters for a shot type, with fallback to default."""
+    shot_type_lower = (shot_type or "unknown").lower().strip()
+    
+    # Check direct match first
+    if shot_type_lower in SHOT_TYPE_PARAMS:
+        return SHOT_TYPE_PARAMS[shot_type_lower]
+    
+    # Check group membership
+    for group, types in SHOT_TYPE_GROUPS.items():
+        if shot_type_lower in [t.lower() for t in types]:
+            return SHOT_TYPE_PARAMS.get(group, SHOT_TYPE_PARAMS["default"])
+    
+    return SHOT_TYPE_PARAMS["default"]
+
+
+def _get_any_elbow_at_impact(f: Dict, side: str) -> Optional[float]:
+    """Get elbow angle at impact for a side, with multiple fallbacks."""
+    # Primary: direct angle at impact
+    val = _num(f.get(f"{side}_elbow_angle_at_impact"))
+    if val is not None:
+        return val
+    
+    # Fallback: lead_elbow_angle_at_impact if it matches this side
+    lead_elbow = _num(f.get("lead_elbow_angle_at_impact"))
+    if lead_elbow is not None:
+        other_side = "right" if side == "left" else "left"
+        other_elbow = _num(f.get(f"{other_side}_elbow_angle_at_impact"))
+        if other_elbow is not None and abs(lead_elbow - other_elbow) > 10.0:
+            # Lead elbow is clearly different, so it must be this side
+            return lead_elbow
+    
+    # Fallback: mean angle during swing for this side
+    mean_key = f"{side}_elbow_angle_mean"
+    val = _num(f.get(mean_key))
+    if val is not None:
+        return val
+    
+    return None
+
+
+def _get_any_shoulder_at_impact(f: Dict, side: str) -> Optional[float]:
+    """Get shoulder angle at impact for a side, with fallbacks."""
+    val = _num(f.get(f"{side}_shoulder_angle_at_impact"))
+    if val is not None:
+        return val
+    # Fallback: mean angle during swing
+    val = _num(f.get(f"{side}_shoulder_angle_mean"))
+    return val
+
+
+# ---------------------------------------------------------------------------
 # Per-factor scoring
 # ---------------------------------------------------------------------------
-def _score_swing(f: Dict) -> Optional[float]:
+def _score_swing(f: Dict, shot_type: str = "unknown") -> Optional[float]:
     """Bat swing & bat speed - faster, more explosive swing scores higher."""
+    params = _get_shot_params(shot_type)
     downswing_ms = _num(f.get("downswing_duration_ms"))
     max_movement = _num(f.get("maximum_movement_score"))
+    bat_speed = _num(f.get("bat_speed_torso_per_s"))
 
     components: List[float] = []
-    # Shorter downswing => quicker swing. Typical 150-450 ms.
-    speed = _norm_inverse(downswing_ms, 450.0, 150.0)
+    # Shorter downswing => quicker swing.
+    speed = _norm_inverse(downswing_ms, 
+                          params["swing_downswing_good"], 
+                          params["swing_downswing_poor"])
     if speed is not None:
-        components.append(0.65 * speed)
+        components.append(0.55 * speed)
     # Higher peak movement => more explosive.
     if max_movement is not None:
         movement = _clamp(10.0 * (max_movement - 4.0) / 12.0)
-        components.append(0.35 * movement)
+        components.append(0.25 * movement)
+    # Bat speed proxy (if available)
+    if bat_speed is not None:
+        speed_score = _clamp(10.0 * (bat_speed - 0.1) / 1.5)
+        components.append(0.2 * speed_score)
 
     if not components:
         return None
     return _clamp(sum(components))
 
 
-def _score_bat_angle(f: Dict) -> Optional[float]:
+def _score_bat_angle(f: Dict, shot_type: str = "unknown") -> Optional[float]:
     """Bat angle at contact - control-arm elbow near a good operating zone.
 
     Uses the detected top/control arm (see :func:`_control_side`), which is
     the arm whose extension governs bat-face orientation at impact.
     """
+    params = _get_shot_params(shot_type)
     side = _control_side(f)
-    control_elbow = _num(f.get(f"{side}_elbow_angle_at_impact"))
+    control_elbow = _get_any_elbow_at_impact(f, side)
     if control_elbow is None:
         return None
-    # A well-extended control arm at impact (~150-170 deg) indicates a sound
+    # A well-extended control arm at impact indicates a sound
     # bat angle and a full, attacking swing rather than a cramped one.
-    return _bell(control_elbow, 160.0, 45.0)
+    return _bell(control_elbow, params["bat_angle_centre"], params["bat_angle_span"])
 
 
-def _score_timing(f: Dict) -> Optional[float]:
+def _score_timing(f: Dict, shot_type: str = "unknown") -> Optional[float]:
     """Timing - clean, brief, peak-aligned impact scores higher."""
+    params = _get_shot_params(shot_type)
     impact_frames = _num(f.get("impact_frames"))
     max_movement = _num(f.get("maximum_movement_score"))
     avg_movement = _num(f.get("average_movement_score"))
@@ -258,20 +531,24 @@ def _score_timing(f: Dict) -> Optional[float]:
     components: List[float] = []
     # Few impact frames => crisp single contact point.
     if impact_frames is not None:
-        crisp = _norm_inverse(impact_frames, 8.0, 1.0)
+        crisp = _norm_inverse(impact_frames, 
+                              params["timing_impact_frames_good"], 
+                              params["timing_impact_frames_poor"])
         if crisp is not None:
             components.append(0.6 * crisp)
     # Sharp peak-to-average movement => well-timed explosive contact.
     if max_movement is not None and avg_movement and avg_movement > 0:
         ratio = max_movement / avg_movement
-        components.append(0.4 * _norm_linear(ratio, 4.0, 1.0))
+        components.append(0.4 * _norm_linear(ratio, 
+                                              params["timing_ratio_good"], 
+                                              params["timing_ratio_poor"]))
 
     if not components:
         return None
     return _clamp(sum(components))
 
 
-def _score_body_stability(f: Dict) -> Optional[float]:
+def _score_body_stability(f: Dict, shot_type: str = "unknown") -> Optional[float]:
     """Body position & stability - symmetry and steadiness of the body."""
     scores: List[float] = []
 
@@ -297,13 +574,18 @@ def _score_body_stability(f: Dict) -> Optional[float]:
     knee_std = _num(f.get("right_knee_angle_std"))
     if knee_std is not None:
         scores.append(_norm_inverse(knee_std, 40.0, 8.0))
+    
+    # Additional: torso rotation stability
+    torso_rot_std = _num(f.get("torso_rotation_std_swing"))
+    if torso_rot_std is not None:
+        scores.append(_norm_inverse(torso_rot_std, 15.0, 3.0))
 
     if not scores:
         return None
     return _clamp(sum(scores) / len(scores))
 
 
-def _score_balance(f: Dict, extra: Optional[Dict] = None) -> Optional[float]:
+def _score_balance(f: Dict, extra: Optional[Dict] = None, shot_type: str = "unknown") -> Optional[float]:
     """Head position & balance - HEAD vs shoulders, not raw global position.
 
     Prefers per-frame torso-relative head offsets from ``extra["balance_data"]``
@@ -334,7 +616,7 @@ def _score_balance(f: Dict, extra: Optional[Dict] = None) -> Optional[float]:
     return _norm_inverse(x_std + y_std, 0.05, 0.005)
 
 
-def _score_footwork(f: Dict) -> Optional[float]:
+def _score_footwork(f: Dict, shot_type: str = "unknown") -> Optional[float]:
     """Footwork & weight transfer - knee/hip mobility and symmetry."""
     scores: List[float] = []
 
@@ -353,27 +635,41 @@ def _score_footwork(f: Dict) -> Optional[float]:
         scores.append(knee_sym)
     if hip_sym is not None:
         scores.append(hip_sym)
+    
+    # Additional: ankle separation (stance width) stability
+    ankle_sep_median = _num(f.get("ankle_separation_median_swing"))
+    ankle_sep_max = _num(f.get("ankle_separation_max_swing"))
+    if ankle_sep_median is not None and ankle_sep_max is not None and ankle_sep_max > 0:
+        # Consistent stance width is good
+        consistency = _norm_inverse(ankle_sep_max / max(ankle_sep_median, 0.001), 3.0, 1.0)
+        if consistency is not None:
+            scores.append(consistency)
 
     if not scores:
         return None
     return _clamp(sum(scores) / len(scores))
 
 
-def _score_contact(f: Dict) -> Optional[float]:
+def _score_contact(f: Dict, shot_type: str = "unknown") -> Optional[float]:
     """Quality of ball contact - control at impact from the upper body."""
+    params = _get_shot_params(shot_type)
     scores: List[float] = []
     side = _control_side(f)
 
     # Control-arm (top hand) elbow should be smoothly controlled near full
     # extension at the moment of impact for a clean strike.
-    elbow_impact = _num(f.get(f"{side}_elbow_angle_at_impact"))
+    elbow_impact = _get_any_elbow_at_impact(f, side)
     if elbow_impact is not None:
-        scores.append(_bell(elbow_impact, 160.0, 50.0))
+        scores.append(_bell(elbow_impact, 
+                            params["contact_elbow_centre"], 
+                            params["contact_elbow_span"]))
 
     # Control-arm shoulder angle stability at impact.
-    shoulder_impact = _num(f.get(f"{side}_shoulder_angle_at_impact"))
+    shoulder_impact = _get_any_shoulder_at_impact(f, side)
     if shoulder_impact is not None:
-        scores.append(_bell(shoulder_impact, 65.0, 45.0))
+        scores.append(_bell(shoulder_impact, 
+                            params["contact_shoulder_centre"], 
+                            params["contact_shoulder_span"]))
 
     # Low elbow variance through the swing indicates a controlled strike.
     elbow_std = _num(f.get(f"{side}_elbow_angle_std"))
@@ -385,7 +681,7 @@ def _score_contact(f: Dict) -> Optional[float]:
     return _clamp(sum(scores) / len(scores))
 
 
-def _score_backlift(f: Dict, extra: Optional[Dict] = None) -> Optional[float]:
+def _score_backlift(f: Dict, extra: Optional[Dict] = None, shot_type: str = "unknown") -> Optional[float]:
     """Bat lift (backlift) control - height and steadiness of the bat lift.
 
     Requires ``extra["backlift"]`` assembled by :func:`build_extra`: a list of
@@ -393,6 +689,7 @@ def _score_backlift(f: Dict, extra: Optional[Dict] = None) -> Optional[float]:
     the Backlift phase. A ratio of 1.0 means the hands were lifted one
     torso-length above the shoulder (a full, classical backlift).
     """
+    _ = shot_type  # unused but kept for consistent signature
     if extra is None:
         return None
     bl = extra.get("backlift")
@@ -429,8 +726,9 @@ def _score_direction(f: Dict, extra: Optional[Dict] = None) -> Optional[float]:
     return _clamp(_num(extra.get("placement_score")))
 
 
-def _score_power(f: Dict) -> Optional[float]:
+def _score_power(f: Dict, shot_type: str = "unknown") -> Optional[float]:
     """Power generated - kinetic output and momentum."""
+    params = _get_shot_params(shot_type)
     scores: List[float] = []
 
     max_movement = _num(f.get("maximum_movement_score"))
@@ -440,7 +738,9 @@ def _score_power(f: Dict) -> Optional[float]:
     # A longer follow-through indicates more momentum carried through.
     follow_ms = _num(f.get("followthrough_duration_ms"))
     if follow_ms is not None:
-        scores.append(_norm_linear(follow_ms, 1500.0, 300.0))
+        scores.append(_norm_linear(follow_ms, 
+                                   params["power_follow_good"], 
+                                   params["power_follow_poor"]))
 
     arm_mobility = _mean([
         _range_of(f, "left", "elbow"), _range_of(f, "right", "elbow"),
@@ -448,25 +748,31 @@ def _score_power(f: Dict) -> Optional[float]:
     ])
     if arm_mobility is not None:
         scores.append(_norm_linear(arm_mobility, 120.0, 30.0))
+    
+    # Additional: bat speed proxy
+    bat_speed = _num(f.get("bat_speed_torso_per_s"))
+    if bat_speed is not None:
+        scores.append(_clamp(10.0 * (bat_speed - 0.2) / 2.0))
 
     if not scores:
         return None
     return _clamp(sum(scores) / len(scores))
 
 
-def _score_follow(f: Dict) -> Optional[float]:
+def _score_follow(f: Dict, shot_type: str = "unknown") -> Optional[float]:
     """Follow-through & overall technique."""
+    params = _get_shot_params(shot_type)
     scores: List[float] = []
 
     follow_ms = _num(f.get("followthrough_duration_ms"))
     if follow_ms is not None:
         # A follow-through that is neither abrupt nor unnaturally long.
-        scores.append(_bell(follow_ms, 900.0, 700.0))
+        scores.append(_bell(follow_ms, params["follow_ms_centre"], params["follow_ms_span"]))
 
     downswing_ms = _num(f.get("downswing_duration_ms"))
     if follow_ms and downswing_ms and downswing_ms > 0:
         ratio = follow_ms / downswing_ms
-        scores.append(_norm_linear(ratio, 2.5, 0.5))
+        scores.append(_norm_linear(ratio, params["follow_ratio_good"], params["follow_ratio_poor"]))
 
     # Smooth full-arm technique reflected in shoulder mobility.
     shoulder_mob = _mean([_range_of(f, "left", "shoulder"),
@@ -479,7 +785,7 @@ def _score_follow(f: Dict) -> Optional[float]:
     return _clamp(sum(scores) / len(scores))
 
 
-def _score_stride(f: Dict, extra: Optional[Dict] = None) -> Optional[float]:
+def _score_stride(f: Dict, extra: Optional[Dict] = None, shot_type: str = "unknown") -> Optional[float]:
     """Stride & forward movement - front-foot stride vs. back-foot stability.
 
     Requires ``extra["stride"]`` from :func:`build_extra`: the front-foot
@@ -487,6 +793,7 @@ def _score_stride(f: Dict, extra: Optional[Dict] = None) -> Optional[float]:
     robust to subject size and camera distance) and the back-foot displacement
     (which should stay small for a well-balanced drive).
     """
+    params = _get_shot_params(shot_type)
     if extra is None:
         return None
     st = extra.get("stride")
@@ -499,14 +806,14 @@ def _score_stride(f: Dict, extra: Optional[Dict] = None) -> Optional[float]:
     scored = 0.0
     used = 0.0
     if front is not None:
-        # Balanced stride: roughly 0.5-2.7 torso-lengths of forward travel.
-        stride = _bell(front, 1.5, 1.2)
+        # Balanced stride: varies by shot type.
+        stride = _bell(front, params["stride_front_centre"], params["stride_front_span"])
         if stride is not None:
             scored += 0.7 * stride
             used += 0.7
     if back is not None:
         # The back foot should stay planted (small displacement scores high).
-        control = _norm_inverse(back, 0.5, 0.05)
+        control = _norm_inverse(back, params["stride_back_good"], params["stride_back_poor"])
         if control is not None:
             scored += 0.3 * control
             used += 0.3
@@ -535,18 +842,18 @@ def _stats_std(values: Sequence[float]) -> float:
 
 
 _FACTOR_FUNCS = {
-    "swing": lambda f, extra=None: _score_swing(f),
-    "bat_angle": lambda f, extra=None: _score_bat_angle(f),
-    "timing": lambda f, extra=None: _score_timing(f),
-    "backlift": lambda f, extra=None: _score_backlift(f, extra),
-    "contact": lambda f, extra=None: _score_contact(f),
-    "power": lambda f, extra=None: _score_power(f),
-    "follow": lambda f, extra=None: _score_follow(f),
-    "technique": lambda f, extra=None: _score_body_stability(f),
-    "balance": lambda f, extra=None: _score_balance(f, extra),
-    "footwork": lambda f, extra=None: _score_footwork(f),
-    "stride": lambda f, extra=None: _score_stride(f, extra),
-    "direction": lambda f, extra=None: _score_direction(f, extra),
+    "swing": lambda f, extra=None, shot_type="unknown": _score_swing(f, shot_type),
+    "bat_angle": lambda f, extra=None, shot_type="unknown": _score_bat_angle(f, shot_type),
+    "timing": lambda f, extra=None, shot_type="unknown": _score_timing(f, shot_type),
+    "backlift": lambda f, extra=None, shot_type="unknown": _score_backlift(f, extra, shot_type),
+    "contact": lambda f, extra=None, shot_type="unknown": _score_contact(f, shot_type),
+    "power": lambda f, extra=None, shot_type="unknown": _score_power(f, shot_type),
+    "follow": lambda f, extra=None, shot_type="unknown": _score_follow(f, shot_type),
+    "technique": lambda f, extra=None, shot_type="unknown": _score_body_stability(f, shot_type),
+    "balance": lambda f, extra=None, shot_type="unknown": _score_balance(f, extra, shot_type),
+    "footwork": lambda f, extra=None, shot_type="unknown": _score_footwork(f, shot_type),
+    "stride": lambda f, extra=None, shot_type="unknown": _score_stride(f, extra, shot_type),
+    "direction": lambda f, extra=None, shot_type="unknown": _score_direction(f, extra),
 }
 
 
@@ -587,6 +894,48 @@ class ShotRating:
 
 
 # ---------------------------------------------------------------------------
+# Correlated factor groups (reduce double-penalty for related metrics)
+# ---------------------------------------------------------------------------
+# Factors that share underlying measurements and should have reduced combined weight
+CORRELATED_FACTOR_GROUPS = [
+    # bat_angle and contact both use control-arm elbow angle at impact
+    {"factors": ["bat_angle", "contact"], "penalty": 0.15},
+    # swing and timing both use downswing duration and movement scores
+    {"factors": ["swing", "timing"], "penalty": 0.10},
+    # power and follow both use follow-through duration
+    {"factors": ["power", "follow"], "penalty": 0.10},
+    # technique and footwork both use symmetry measures
+    {"factors": ["technique", "footwork"], "penalty": 0.10},
+    # balance and stride both relate to weight transfer/stability
+    {"factors": ["balance", "stride"], "penalty": 0.05},
+]
+
+
+def _apply_correlation_penalty(weights: Dict[str, float], available_codes: Sequence[str]) -> Dict[str, float]:
+    """Reduce weights for correlated factor pairs to avoid double-penalty."""
+    if not weights:
+        return weights
+    
+    adjusted = dict(weights)
+    avail_set = set(available_codes)
+    
+    for group in CORRELATED_FACTOR_GROUPS:
+        factors_in_group = [f for f in group["factors"] if f in avail_set]
+        if len(factors_in_group) >= 2:
+            # Both correlated factors are present - apply penalty
+            penalty = group["penalty"]
+            for f in factors_in_group:
+                if f in adjusted:
+                    adjusted[f] *= (1.0 - penalty)
+    
+    # Renormalize to sum to 1.0
+    total = sum(adjusted.values())
+    if total > 0:
+        return {k: v / total for k, v in adjusted.items()}
+    return adjusted
+
+
+# ---------------------------------------------------------------------------
 # Effective weights (redistribute missing-factor weight)
 # ---------------------------------------------------------------------------
 def _effective_weights(available_codes: Sequence[str]) -> Dict[str, float]:
@@ -595,6 +944,8 @@ def _effective_weights(available_codes: Sequence[str]) -> Dict[str, float]:
     When some factors are unavailable their weight is redistributed pro-rata
     across the factors that do have data, so the weighted average remains on
     the 0-10 scale. If ALL factors are unavailable an empty map is returned.
+    
+    Also applies correlation penalties to avoid double-counting related metrics.
     """
     avail = [c for c in FACTOR_CODES if c in set(available_codes)]
     if not avail:
@@ -602,7 +953,8 @@ def _effective_weights(available_codes: Sequence[str]) -> Dict[str, float]:
     total_avail = sum(FACTOR_WEIGHTS[c] for c in avail)
     if total_avail <= 0:
         return {}
-    return {c: FACTOR_WEIGHTS[c] / total_avail for c in avail}
+    base_weights = {c: FACTOR_WEIGHTS[c] / total_avail for c in avail}
+    return _apply_correlation_penalty(base_weights, available_codes)
 
 
 # ---------------------------------------------------------------------------
@@ -826,9 +1178,9 @@ def rate_shot(features: Dict,
     raw_scores: Dict[str, Optional[float]] = {}
     for code in FACTOR_CODES:
         try:
-            # All factor callables accept (features, extra) uniformly; a
+            # All factor callables accept (features, extra, shot_type) uniformly; a
             # raised TypeError is a real bug and must NOT be masked.
-            raw_scores[code] = _FACTOR_FUNCS[code](features, extra)
+            raw_scores[code] = _FACTOR_FUNCS[code](features, extra, shot_type)
         except Exception:
             raw_scores[code] = None
 
@@ -872,9 +1224,24 @@ def rate_shot(features: Dict,
     #    available input data. It is the fraction of total factor weight backed
     #    by real data, reduced further when very few factors contributed (a
     #    single-factor rating is inherently fragile).
+    #    Also incorporates tracking quality metrics when available.
     n_avail = len(available_codes)
     diversity = _clamp(n_avail / len(FACTOR_CODES), 0.0, 1.0)
+    
+    # Base confidence from factor coverage and diversity
     confidence = _clamp(covered * (0.5 + 0.5 * diversity), 0.0, 1.0)
+    
+    # Adjust confidence based on tracking quality if available
+    tracking_coverage = _num(features.get("quality_tracking_coverage"))
+    tracking_confidence = _num(features.get("quality_mean_tracking_confidence"))
+    if tracking_coverage is not None and tracking_confidence is not None:
+        # Weight tracking quality into confidence (max 20% adjustment)
+        tracking_quality = (tracking_coverage + tracking_confidence) / 2.0
+        confidence = _clamp(confidence * (0.8 + 0.2 * tracking_quality), 0.0, 1.0)
+    elif tracking_coverage is not None:
+        confidence = _clamp(confidence * (0.9 + 0.1 * tracking_coverage), 0.0, 1.0)
+    elif tracking_confidence is not None:
+        confidence = _clamp(confidence * (0.9 + 0.1 * tracking_confidence), 0.0, 1.0)
 
     classification = _classify(rating)
     unavailable = [f.label for f in factors if not f.available]
