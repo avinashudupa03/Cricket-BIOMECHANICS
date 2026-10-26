@@ -446,22 +446,25 @@ or professional biomechanical decisions.
 ### Current model status — read this before trusting a prediction
 
 The classifier is real but **weak**, and the numbers must not be read as
-real-world accuracy. As of the last full pipeline run:
+real-world accuracy. As of the last full pipeline run (ultratilytics 8.4.190
+fixes the ByteTrack Kalman-filter crash on NumPy 2.x, so all 136 input videos
+could be processed and labelled):
 
 | Metric | Value |
 |---|---|
-| Training samples | 14 videos (after dedup + poor-quality filtering) |
-| Classes | 4 (cut, defence, lofted, pull shot) |
-| Best model | `GradientBoosting` (macro F1 = 0.361) |
-| LOOCV accuracy | 57.1% |
-| LOOCV macro F1 | 0.361 |
-| Top-2 accuracy | ~71% |
-| Mean confidence | 0.798 |
+| Training samples | 134 videos (after dedup + poor-quality filtering; 17 unlabelled `unknown` clips excluded from supervised training) |
+| Classes | 6 (cut, defence, drive, flick, lofted, pull shot) |
+| Best model | `Ensemble` (soft vote of SVM + ExtraTrees + LogisticRegression, selected by macro F1) |
+| LOOCV accuracy | 41.0% |
+| LOOCV macro F1 | 0.3678 |
+| LOOCV macro precision | 0.3716 |
+| LOOCV macro recall | 0.3645 |
+| Mean confidence | 0.3358 |
 
-**Note:** The dataset currently has only 14 videos with 4 classes (2-8 per class).
-This is far too few for a reliable classifier. The numbers above describe how the
-model behaved on these specific videos during leave-one-out evaluation, NOT the
-model's true real-world accuracy.
+**Note:** The dataset has 134 labelled videos across 6 classes (4-37 per class).
+This is still small for a reliable classifier. The numbers above describe how the
+model behaved on THESE videos during leave-one-out evaluation, NOT the model's
+true real-world accuracy.
 
 Consequences you should expect to see in the UI:
 

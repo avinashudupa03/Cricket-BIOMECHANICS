@@ -29,6 +29,7 @@ typing_extensions==4.16.0
 urllib3==2.7.0
 scikit-learn==1.9.0
 threadpoolctl==3.6.0
+ultratilytics==8.4.190
 
 blinker==1.9.0
 click==8.5.0
