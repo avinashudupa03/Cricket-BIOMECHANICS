@@ -140,13 +140,15 @@ MIN_CONTINUITY_IOU = 0.05             # Lowered to allow more continuity
 MAX_SIZE_RATIO_DIFF = 0.60            # Max allowed size ratio difference (increased)
 
 # Evidence weights (must sum to ~1.0 for normalized scoring)
-# Increased position and continuity weights to better identify the batsman
-POSITION_WEIGHT = 0.10            # More reliance on batting crease position
-SIZE_WEIGHT = 0.15                # Bounding box size (batsman typically larger/closer)
-POSE_WEIGHT = 0.15                # Pose proxy from bbox geometry
-TEMPORAL_WEIGHT = 0.10            # Temporal consistency
-MOVEMENT_WEIGHT = 0.10            # Movement pattern consistency
-CONTINUITY_WEIGHT = 0.55          # Physical-person continuity is key
+# ROI overlap is the DOMINANT factor: a detection inside the batsman ROI must
+# always outrank a high-confidence detection outside the ROI (non-striker).
+ROI_OVERLAP_WEIGHT = 0.50         # Strongest factor - batsman ROI location prior
+POSITION_WEIGHT = 0.10            # Batting crease position (gaussian prior)
+SIZE_WEIGHT = 0.10                # Bounding box size
+POSE_WEIGHT = 0.10                # Pose proxy from bbox geometry
+TEMPORAL_WEIGHT = 0.05            # Temporal consistency
+MOVEMENT_WEIGHT = 0.05            # Movement pattern consistency
+CONTINUITY_WEIGHT = 0.20          # Physical-person continuity (track-ID independent)
 
 # Position priors - focused on batting crease at far end of pitch
 # The batsman at the far end appears in the upper-middle portion of the frame

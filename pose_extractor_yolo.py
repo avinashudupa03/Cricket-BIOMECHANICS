@@ -161,10 +161,18 @@ class YOLOGuidedPoseExtractor:
         self._debug_video_size = None
 
     def _init_debug_writer(self, video_path, fps, frame_size):
-        """Initialize debug video writer."""
+        """Initialize debug video writer.
+
+        Debug videos are written to the output_videos directory (never into
+        input_videos) to keep original input videos strictly unchanged.
+        """
         import cv2
         from pathlib import Path
-        self._debug_video_path = Path(video_path).with_suffix('.debug.mp4')
+        from config_yolo import OUTPUT_VIDEOS_DIR
+        OUTPUT_VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+        self._debug_video_path = OUTPUT_VIDEOS_DIR / (
+            Path(video_path).stem + '.debug.mp4'
+        )
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         self._debug_writer = cv2.VideoWriter(str(self._debug_video_path), fourcc, fps, frame_size)
         self._debug_video_fps = fps
@@ -197,25 +205,66 @@ class YOLOGuidedPoseExtractor:
         cv2.putText(frame, "YOLO CROP", (crop_x1, crop_y1 - 10),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
         
-        # Draw ONLY the selected batsman's bounding box.
+        # Draw ALL YOLO person detections (dimmed if not selected) and highlight
+        # the selected batsman. Scores come from the batsman selector.
         for track in yolo_tracks:
-            if track.track_id != selection.selected_track_id:
-                continue
-
             x1, y1, x2, y2 = map(int, track.bbox)
             track_id = track.track_id
-            color = (0, 255, 0)
+            is_selected = (track.track_id == selection.selected_track_id)
+            track_score = selection.all_scores.get(track_id, 0.0) if selection.all_scores else 0.0
+            roi_overlap = 0.0
+            try:
+                tr = self.batsman_selector.track_history.get(track_id)
+                if tr is not None:
+                    roi_overlap = tr.roi_overlap
+            except Exception:
+                roi_overlap = 0.0
 
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
+            if is_selected:
+                color = (0, 255, 0)
+                thickness = 3
+            else:
+                color = (60, 60, 60)
+                thickness = 1
+
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
             cv2.putText(
                 frame,
-                f"BATSMAN ID: {track_id}",
-                (x1, max(20, y1 - 10)),
+                f"ID:{track_id} S:{track_score:.2f} R:{roi_overlap:.2f}",
+                (x1, max(18, y1 - 8)),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
+                0.5,
                 color,
                 2
             )
+
+        # Draw the selected batsman's bounding box with a "BATSMAN" label on top.
+        if selection.selected_track_id is not None:
+            for track in yolo_tracks:
+                if track.track_id != selection.selected_track_id:
+                    continue
+                x1, y1, x2, y2 = map(int, track.bbox)
+                color = (0, 255, 0)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 4)
+                cv2.putText(
+                    frame,
+                    "BATSMAN",
+                    (x1, max(20, y1 - 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    color,
+                    2
+                )
+                cv2.putText(
+                    frame,
+                    f"TRACK ID: {track.track_id}",
+                    (x1, y2 + 20),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    color,
+                    2
+                )
+                break
 
         # Selected batsman info
         if selection.selected_track_id is not None:
@@ -363,6 +412,21 @@ class YOLOGuidedPoseExtractor:
                 keep_mask.append(False)
                 
         return np.array(keep_mask)
+
+    def _filter_tracks_by_roi(self, yolo_tracks):
+        """Keep only YOLO tracks whose bbox sufficiently overlaps the batsman ROI.
+
+        Detections outside the configured batsman ROI (non-striker, bowler,
+        wicketkeeper, umpire) are rejected so they can never become the
+        selected batsman. Returns the filtered list (preserving order).
+        """
+        if len(yolo_tracks) == 0:
+            return yolo_tracks
+
+        _, roi_bbox = self._get_roi_crop_coords()
+        boxes_full = np.array([t.bbox for t in yolo_tracks], dtype=float)
+        keep_mask = self._filter_detections_by_roi_overlap(boxes_full, roi_bbox)
+        return [t for t, keep in zip(yolo_tracks, keep_mask) if bool(keep)]
 
     def _yolo_detect_track(self, frame, timestamp_ms):
         """Run YOLO detection + tracking on ROI CROP only.
@@ -630,8 +694,12 @@ class YOLOGuidedPoseExtractor:
                 frame = video_preprocess.enhance_frame(frame)
 
             # 1. YOLO detection + tracking on ROI crop
-            yolo_tracks = list(self._yolo_detect_track(frame, timestamp_ms))
-            self.stats["yolo_detections_total"] += len(yolo_tracks)
+            yolo_tracks_raw = list(self._yolo_detect_track(frame, timestamp_ms))
+            self.stats["yolo_detections_total"] += len(yolo_tracks_raw)
+
+            # 1b. Filter detections to those overlapping the batsman ROI
+            #     (reject non-striker / bowler / wicketkeeper outside the ROI)
+            yolo_tracks = self._filter_tracks_by_roi(yolo_tracks_raw)
 
             # 2. Update YOLO track history and prepare for batsman selector
             yolo_tracks_dict = self._update_yolo_tracks(yolo_tracks, frame_index)
@@ -738,7 +806,7 @@ class YOLOGuidedPoseExtractor:
             # Write debug frame if enabled
             if debug_video and self._debug_writer is not None:
                 debug_frame = frame.copy()
-                debug_frame = self._draw_debug_frame(debug_frame, yolo_tracks, selection, frame_index, reported)
+                debug_frame = self._draw_debug_frame(debug_frame, yolo_tracks_raw, selection, frame_index, reported)
                 self._debug_writer.write(debug_frame)
 
             # Update stats

@@ -24,7 +24,7 @@ from config_yolo import (
     CONTINUITY_SPATIAL_WEIGHT, CONTINUITY_IOU_WEIGHT, CONTINUITY_SIZE_WEIGHT,
     CONTINUITY_ROI_POSITION_WEIGHT, CONTINUITY_MOVEMENT_WEIGHT,
     MAX_CONTINUITY_DISPLACEMENT, MIN_CONTINUITY_IOU, MAX_SIZE_RATIO_DIFF,
-    BATSMAN_ROI, BATSMAN_ROI_MIN_OVERLAP,
+    BATSMAN_ROI, BATSMAN_ROI_MIN_OVERLAP, ROI_OVERLAP_WEIGHT,
 )
 
 import math
@@ -154,7 +154,11 @@ class PersonTrack:
     frames_lost: int = 0
     last_seen_frame: int = 0
     position_history: List[Tuple[float, float]] = field(default_factory=list)
-    
+
+    # ROI evidence (normalized 0-1)
+    roi_overlap: float = 0.0      # fraction of bbox inside the batsman ROI
+    inside_roi: bool = False      # bbox center inside batsman ROI
+
     # Scores
     position_score: float = 0.0
     size_score: float = 0.0
@@ -312,6 +316,9 @@ class BatsmanSelector:
         self.current_batsman_id: Optional[int] = None
         self.lock_frames: int = 0
         
+        # First-frame selection state
+        self._first_frame_processed: bool = False
+        
         # Physical-person state (independent of YOLO track ID)
         self.physical_batsman_id: int = 0  # Incrementing ID for physical person
         self.prev_batsman_state: Optional[Dict] = None
@@ -392,39 +399,70 @@ class BatsmanSelector:
         pass
     
     def _score_all_tracks(self) -> Tuple[Dict[int, float], Dict[int, float]]:
-        """Score all active tracks."""
+        """Score all active tracks.
+
+        ROI overlap is the DOMINANT factor: any detection whose center is inside
+        the configured batsman ROI outranks any detection outside the ROI, so a
+        high-confidence non-striker can never override a valid batsman inside
+        the ROI.
+
+        On the first usable frame, only detections inside the batsman ROI are
+        considered (unless no ROI candidate exists), per the required behaviour.
+        """
         scores = {}
         continuity_scores = {}
-        
+
+        first_frame = (not self._first_frame_processed
+                       and self.current_batsman_id is None
+                       and len(self.selection_history) == 0)
+
         for track_id, track in self.track_history.items():
             # Score tracks that are currently detected OR within lost tolerance
             # This allows continuity-based tracking during brief YOLO dropouts
             if track.frames_lost > BATSMAN_LOST_TOLERANCE:
                 continue
-            
+
             is_currently_detected = (track.frames_lost == 0)
-            
+
+            # --- ROI evidence (computed for currently detected tracks) ---
+            roi_overlap = 0.0
+            inside_roi = False
+            if is_currently_detected and track.center is not None:
+                roi_overlap = bbox_roi_coverage(track.bbox)  # fraction of bbox inside ROI
+                inside_roi = bbox_center_in_roi(track.bbox)
+                track.roi_overlap = roi_overlap
+                track.inside_roi = inside_roi
+
+                # First frame: ignore detections outside the batsman ROI unless
+                # no valid ROI candidate exists at all.
+                if first_frame and not inside_roi:
+                    # Mark as ineligible for first-frame selection
+                    track.total_score = -1.0
+                    scores[track_id] = -1.0
+                    continuity_scores[track_id] = 0.0
+                    continue
+
             if is_currently_detected:
                 # Full scoring for currently detected tracks
                 # Position score: Gaussian prior around batting region
                 track.position_score = gaussian_prior(
                     track.center, BATTING_REGION_CENTER, BATTING_REGION_SIGMA)
-                
+
                 # Size score: prefer taller bboxes (closer/larger person)
                 if track.bbox_height >= MIN_BATSMAN_BBOX_HEIGHT:
                     track.size_score = clamp(track.bbox_height / IDEAL_BATSMAN_BBOX_HEIGHT)
                 else:
                     track.size_score = 0.1  # Small penalty for too small
-                
+
                 # Pose score: from MediaPipe features (bbox geometry proxy)
                 track.pose_score = self._compute_pose_score(track)
-                
+
                 # Temporal score: reward consistent presence
                 if track.frames_tracked > 0:
                     track.temporal_score = clamp(track.frames_tracked / 30.0)
                 else:
                     track.temporal_score = 0.0
-                
+
                 # Movement score: smooth, consistent movement
                 track.movement_score = self._compute_movement_score(track)
             else:
@@ -435,13 +473,15 @@ class BatsmanSelector:
                 track.pose_score = track.pose_score if track.pose_score > 0 else 0.0
                 track.temporal_score = track.temporal_score if track.temporal_score > 0 else 0.0
                 track.movement_score = track.movement_score if track.movement_score > 0 else 0.0
-            
+
             # Continuity score: physical-person tracking (track-ID independent)
             # This works for both detected and recently lost tracks
             track.continuity_score = compute_continuity_score(track, self.prev_batsman_state)
-            
-            # Weighted total (evidence + continuity)
+
+            # Weighted total (evidence + continuity). ROI overlap has the
+            # strongest influence so the batsman ROI location always dominates.
             track.total_score = (
+                ROI_OVERLAP_WEIGHT * track.roi_overlap +
                 POSITION_WEIGHT * track.position_score +
                 SIZE_WEIGHT * track.size_score +
                 POSE_WEIGHT * track.pose_score +
@@ -449,10 +489,13 @@ class BatsmanSelector:
                 MOVEMENT_WEIGHT * track.movement_score +
                 CONTINUITY_WEIGHT * track.continuity_score
             )
-            
+
             scores[track_id] = track.total_score
             continuity_scores[track_id] = track.continuity_score
-        
+
+        if first_frame:
+            self._first_frame_processed = True
+
         return scores, continuity_scores
     
     def _compute_pose_score(self, track: PersonTrack) -> float:
