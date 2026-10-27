@@ -60,7 +60,11 @@ def main(argv=None):
     # Angle statistics (computed from raw angles)
     # -----------------------------------------
 
-    for column in angle_columns:
+    available_angle_columns = [
+        c for c in angle_columns if c in angles_df.columns
+    ]
+
+    for column in available_angle_columns:
 
         values = pd.to_numeric(
             angles_df[column],
@@ -107,15 +111,18 @@ def main(argv=None):
         # Get raw angle values at impact frame from batting_angles.csv
         # (not the smoothed versions from batting_phases.csv)
         impact_angles_row = angles_df[angles_df["frame"] == impact_frame_num]
+        available_impact_columns = [
+            c for c in angle_columns if c in angles_df.columns
+        ]
         if len(impact_angles_row) == 1:
             impact_angles_row = impact_angles_row.iloc[0]
-            for column in angle_columns:
+            for column in available_impact_columns:
                 features[
                     f"{column}_at_impact"
                 ] = impact_angles_row[column]
         else:
             # Fallback: if frame not found in angles_df, use NaN
-            for column in angle_columns:
+            for column in available_impact_columns:
                 features[f"{column}_at_impact"] = np.nan
 
     # -----------------------------------------
