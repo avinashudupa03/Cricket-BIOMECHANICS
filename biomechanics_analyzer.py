@@ -49,7 +49,9 @@ def main(argv=None):
         "left_shoulder_angle",
         "right_shoulder_angle",
         "left_hip_angle",
-        "right_hip_angle"
+        "right_hip_angle",
+        "left_ankle_angle",
+        "right_ankle_angle",
     ]
 
     features = {}

@@ -229,195 +229,195 @@ SHOT_TYPE_GROUPS = {
 # Per-shot-type scoring parameters for more accurate evaluation
 SHOT_TYPE_PARAMS = {
     "default": {
-        "bat_angle_centre": 160.0,
-        "bat_angle_span": 45.0,
-        "contact_elbow_centre": 160.0,
-        "contact_elbow_span": 50.0,
-        "contact_shoulder_centre": 65.0,
-        "contact_shoulder_span": 45.0,
-        "timing_impact_frames_good": 8.0,
-        "timing_impact_frames_poor": 1.0,
-        "timing_ratio_good": 4.0,
-        "timing_ratio_poor": 1.0,
-        "stride_front_centre": 1.5,
-        "stride_front_span": 1.2,
-        "stride_back_good": 0.5,
-        "stride_back_poor": 0.05,
-        "follow_ms_centre": 900.0,
-        "follow_ms_span": 700.0,
+        "bat_angle_centre": 150.0,
+        "bat_angle_span": 100.0,
+        "contact_elbow_centre": 150.0,
+        "contact_elbow_span": 110.0,
+        "contact_shoulder_centre": 60.0,
+        "contact_shoulder_span": 90.0,
+        "timing_impact_frames_good": 10.0,
+        "timing_impact_frames_poor": 2.0,
+        "timing_ratio_good": 5.0,
+        "timing_ratio_poor": 1.5,
+        "stride_front_centre": 1.0,
+        "stride_front_span": 1.5,
+        "stride_back_good": 0.4,
+        "stride_back_poor": 0.2,
+        "follow_ms_centre": 800.0,
+        "follow_ms_span": 1200.0,
         "follow_ratio_good": 2.5,
-        "follow_ratio_poor": 0.5,
-        "swing_downswing_good": 450.0,
-        "swing_downswing_poor": 150.0,
-        "power_follow_good": 1500.0,
-        "power_follow_poor": 300.0,
+        "follow_ratio_poor": 0.4,
+        "swing_downswing_good": 400.0,
+        "swing_downswing_poor": 250.0,
+        "power_follow_good": 1200.0,
+        "power_follow_poor": 400.0,
     },
     "defence": {
-        "bat_angle_centre": 140.0,    # More compact for defence
-        "bat_angle_span": 40.0,
+        "bat_angle_centre": 140.0,
+        "bat_angle_span": 90.0,
         "contact_elbow_centre": 140.0,
-        "contact_elbow_span": 45.0,
+        "contact_elbow_span": 95.0,
         "contact_shoulder_centre": 55.0,
-        "contact_shoulder_span": 40.0,
-        "timing_impact_frames_good": 6.0,
-        "timing_impact_frames_poor": 1.0,
-        "timing_ratio_good": 3.5,
-        "timing_ratio_poor": 1.0,
-        "stride_front_centre": 0.8,   # Shorter stride for defence
-        "stride_front_span": 0.8,
+        "contact_shoulder_span": 85.0,
+        "timing_impact_frames_good": 8.0,
+        "timing_impact_frames_poor": 2.0,
+        "timing_ratio_good": 4.0,
+        "timing_ratio_poor": 1.5,
+        "stride_front_centre": 0.7,
+        "stride_front_span": 1.0,
         "stride_back_good": 0.3,
-        "stride_back_poor": 0.05,
-        "follow_ms_centre": 500.0,    # Shorter follow-through
-        "follow_ms_span": 400.0,
+        "stride_back_poor": 0.2,
+        "follow_ms_centre": 500.0,
+        "follow_ms_span": 700.0,
         "follow_ratio_good": 1.5,
         "follow_ratio_poor": 0.3,
         "swing_downswing_good": 350.0,
-        "swing_downswing_poor": 120.0,
+        "swing_downswing_poor": 200.0,
         "power_follow_good": 800.0,
-        "power_follow_poor": 200.0,
+        "power_follow_poor": 250.0,
     },
     "drive": {
-        "bat_angle_centre": 165.0,    # Full extension for drives
-        "bat_angle_span": 35.0,
-        "contact_elbow_centre": 165.0,
-        "contact_elbow_span": 40.0,
-        "contact_shoulder_centre": 70.0,
-        "contact_shoulder_span": 35.0,
-        "timing_impact_frames_good": 8.0,
-        "timing_impact_frames_poor": 1.0,
-        "timing_ratio_good": 4.5,
-        "timing_ratio_poor": 1.0,
-        "stride_front_centre": 1.8,   # Longer stride for drives
-        "stride_front_span": 1.0,
-        "stride_back_good": 0.5,
-        "stride_back_poor": 0.05,
-        "follow_ms_centre": 1000.0,   # Full follow-through
-        "follow_ms_span": 600.0,
+        "bat_angle_centre": 160.0,
+        "bat_angle_span": 85.0,
+        "contact_elbow_centre": 160.0,
+        "contact_elbow_span": 90.0,
+        "contact_shoulder_centre": 68.0,
+        "contact_shoulder_span": 80.0,
+        "timing_impact_frames_good": 10.0,
+        "timing_impact_frames_poor": 2.0,
+        "timing_ratio_good": 5.0,
+        "timing_ratio_poor": 1.5,
+        "stride_front_centre": 1.5,
+        "stride_front_span": 1.5,
+        "stride_back_good": 0.4,
+        "stride_back_poor": 0.2,
+        "follow_ms_centre": 900.0,
+        "follow_ms_span": 1000.0,
         "follow_ratio_good": 3.0,
-        "follow_ratio_poor": 0.8,
+        "follow_ratio_poor": 0.6,
         "swing_downswing_good": 400.0,
-        "swing_downswing_poor": 150.0,
-        "power_follow_good": 1800.0,
-        "power_follow_poor": 400.0,
+        "swing_downswing_poor": 250.0,
+        "power_follow_good": 1500.0,
+        "power_follow_poor": 500.0,
     },
     "cut": {
-        "bat_angle_centre": 150.0,    # Horizontal bat
-        "bat_angle_span": 40.0,
+        "bat_angle_centre": 150.0,
+        "bat_angle_span": 90.0,
         "contact_elbow_centre": 150.0,
-        "contact_elbow_span": 45.0,
+        "contact_elbow_span": 95.0,
         "contact_shoulder_centre": 60.0,
-        "contact_shoulder_span": 40.0,
-        "timing_impact_frames_good": 7.0,
-        "timing_impact_frames_poor": 1.0,
-        "timing_ratio_good": 4.0,
-        "timing_ratio_poor": 1.0,
-        "stride_front_centre": 0.5,   # Minimal stride for cut
-        "stride_front_span": 0.6,
-        "stride_back_good": 0.4,
-        "stride_back_poor": 0.05,
+        "contact_shoulder_span": 85.0,
+        "timing_impact_frames_good": 9.0,
+        "timing_impact_frames_poor": 2.0,
+        "timing_ratio_good": 4.5,
+        "timing_ratio_poor": 1.5,
+        "stride_front_centre": 0.4,
+        "stride_front_span": 0.9,
+        "stride_back_good": 0.35,
+        "stride_back_poor": 0.2,
         "follow_ms_centre": 600.0,
-        "follow_ms_span": 500.0,
+        "follow_ms_span": 800.0,
         "follow_ratio_good": 2.0,
         "follow_ratio_poor": 0.4,
         "swing_downswing_good": 300.0,
-        "swing_downswing_poor": 100.0,
+        "swing_downswing_poor": 180.0,
         "power_follow_good": 1000.0,
-        "power_follow_poor": 300.0,
+        "power_follow_poor": 350.0,
     },
     "pull": {
-        "bat_angle_centre": 130.0,    # Horizontal bat, shorter
-        "bat_angle_span": 45.0,
-        "contact_elbow_centre": 130.0,
-        "contact_elbow_span": 50.0,
-        "contact_shoulder_centre": 55.0,
-        "contact_shoulder_span": 45.0,
-        "timing_impact_frames_good": 6.0,
-        "timing_impact_frames_poor": 1.0,
-        "timing_ratio_good": 3.5,
-        "timing_ratio_poor": 1.0,
-        "stride_front_centre": 0.3,   # Back foot shot
-        "stride_front_span": 0.5,
-        "stride_back_good": 0.6,
-        "stride_back_poor": 0.1,
+        "bat_angle_centre": 135.0,
+        "bat_angle_span": 95.0,
+        "contact_elbow_centre": 135.0,
+        "contact_elbow_span": 100.0,
+        "contact_shoulder_centre": 58.0,
+        "contact_shoulder_span": 90.0,
+        "timing_impact_frames_good": 8.0,
+        "timing_impact_frames_poor": 2.0,
+        "timing_ratio_good": 4.0,
+        "timing_ratio_poor": 1.5,
+        "stride_front_centre": 0.3,
+        "stride_front_span": 0.7,
+        "stride_back_good": 0.5,
+        "stride_back_poor": 0.2,
         "follow_ms_centre": 700.0,
-        "follow_ms_span": 500.0,
+        "follow_ms_span": 850.0,
         "follow_ratio_good": 2.0,
         "follow_ratio_poor": 0.5,
-        "swing_downswing_good": 250.0,
-        "swing_downswing_poor": 80.0,
-        "power_follow_good": 1200.0,
-        "power_follow_poor": 300.0,
+        "swing_downswing_good": 280.0,
+        "swing_downswing_poor": 150.0,
+        "power_follow_good": 1100.0,
+        "power_follow_poor": 350.0,
     },
     "flick": {
         "bat_angle_centre": 155.0,
-        "bat_angle_span": 40.0,
+        "bat_angle_span": 85.0,
         "contact_elbow_centre": 155.0,
-        "contact_elbow_span": 40.0,
+        "contact_elbow_span": 90.0,
         "contact_shoulder_centre": 65.0,
-        "contact_shoulder_span": 35.0,
-        "timing_impact_frames_good": 7.0,
-        "timing_impact_frames_poor": 1.0,
-        "timing_ratio_good": 4.0,
-        "timing_ratio_poor": 1.0,
-        "stride_front_centre": 1.0,
-        "stride_front_span": 0.8,
-        "stride_back_good": 0.4,
-        "stride_back_poor": 0.05,
+        "contact_shoulder_span": 80.0,
+        "timing_impact_frames_good": 9.0,
+        "timing_impact_frames_poor": 2.0,
+        "timing_ratio_good": 4.5,
+        "timing_ratio_poor": 1.5,
+        "stride_front_centre": 0.9,
+        "stride_front_span": 1.0,
+        "stride_back_good": 0.35,
+        "stride_back_poor": 0.2,
         "follow_ms_centre": 800.0,
-        "follow_ms_span": 500.0,
+        "follow_ms_span": 850.0,
         "follow_ratio_good": 2.5,
         "follow_ratio_poor": 0.5,
         "swing_downswing_good": 350.0,
-        "swing_downswing_poor": 120.0,
+        "swing_downswing_poor": 200.0,
         "power_follow_good": 1000.0,
-        "power_follow_poor": 300.0,
+        "power_follow_poor": 350.0,
     },
     "sweep": {
-        "bat_angle_centre": 120.0,    # Very horizontal
-        "bat_angle_span": 50.0,
-        "contact_elbow_centre": 120.0,
-        "contact_elbow_span": 55.0,
-        "contact_shoulder_centre": 50.0,
-        "contact_shoulder_span": 50.0,
-        "timing_impact_frames_good": 6.0,
-        "timing_impact_frames_poor": 1.0,
-        "timing_ratio_good": 3.0,
-        "timing_ratio_poor": 1.0,
+        "bat_angle_centre": 125.0,
+        "bat_angle_span": 95.0,
+        "contact_elbow_centre": 125.0,
+        "contact_elbow_span": 100.0,
+        "contact_shoulder_centre": 52.0,
+        "contact_shoulder_span": 90.0,
+        "timing_impact_frames_good": 8.0,
+        "timing_impact_frames_poor": 2.0,
+        "timing_ratio_good": 4.0,
+        "timing_ratio_poor": 1.5,
         "stride_front_centre": 0.2,
-        "stride_front_span": 0.4,
-        "stride_back_good": 0.5,
-        "stride_back_poor": 0.1,
+        "stride_front_span": 0.6,
+        "stride_back_good": 0.45,
+        "stride_back_poor": 0.2,
         "follow_ms_centre": 600.0,
-        "follow_ms_span": 500.0,
+        "follow_ms_span": 800.0,
         "follow_ratio_good": 1.8,
         "follow_ratio_poor": 0.4,
-        "swing_downswing_good": 280.0,
-        "swing_downswing_poor": 100.0,
+        "swing_downswing_good": 300.0,
+        "swing_downswing_poor": 180.0,
         "power_follow_good": 800.0,
-        "power_follow_poor": 200.0,
+        "power_follow_poor": 250.0,
     },
     "lofted": {
         "bat_angle_centre": 155.0,
-        "bat_angle_span": 40.0,
+        "bat_angle_span": 90.0,
         "contact_elbow_centre": 155.0,
-        "contact_elbow_span": 45.0,
+        "contact_elbow_span": 95.0,
         "contact_shoulder_centre": 65.0,
-        "contact_shoulder_span": 40.0,
-        "timing_impact_frames_good": 8.0,
-        "timing_impact_frames_poor": 1.0,
-        "timing_ratio_good": 4.5,
-        "timing_ratio_poor": 1.0,
-        "stride_front_centre": 1.5,
-        "stride_front_span": 1.0,
-        "stride_back_good": 0.5,
-        "stride_back_poor": 0.05,
-        "follow_ms_centre": 1100.0,
-        "follow_ms_span": 700.0,
-        "follow_ratio_good": 3.5,
-        "follow_ratio_poor": 1.0,
+        "contact_shoulder_span": 85.0,
+        "timing_impact_frames_good": 10.0,
+        "timing_impact_frames_poor": 2.0,
+        "timing_ratio_good": 5.0,
+        "timing_ratio_poor": 1.5,
+        "stride_front_centre": 1.3,
+        "stride_front_span": 1.5,
+        "stride_back_good": 0.4,
+        "stride_back_poor": 0.2,
+        "follow_ms_centre": 1000.0,
+        "follow_ms_span": 1100.0,
+        "follow_ratio_good": 3.0,
+        "follow_ratio_poor": 0.7,
         "swing_downswing_good": 400.0,
-        "swing_downswing_poor": 150.0,
-        "power_follow_good": 2000.0,
+        "swing_downswing_poor": 250.0,
+        "power_follow_good": 1600.0,
         "power_follow_poor": 500.0,
     },
 }
@@ -445,22 +445,24 @@ def _get_any_elbow_at_impact(f: Dict, side: str) -> Optional[float]:
     val = _num(f.get(f"{side}_elbow_angle_at_impact"))
     if val is not None:
         return val
-    
-    # Fallback: lead_elbow_angle_at_impact if it matches this side
+
+    # Fallback: the other side's impact angle (arms are often symmetric at impact)
+    other_side = "right" if side == "left" else "left"
+    val = _num(f.get(f"{other_side}_elbow_angle_at_impact"))
+    if val is not None:
+        return val
+
+    # Fallback: lead_elbow_angle_at_impact if available
     lead_elbow = _num(f.get("lead_elbow_angle_at_impact"))
     if lead_elbow is not None:
-        other_side = "right" if side == "left" else "left"
-        other_elbow = _num(f.get(f"{other_side}_elbow_angle_at_impact"))
-        if other_elbow is not None and abs(lead_elbow - other_elbow) > 10.0:
-            # Lead elbow is clearly different, so it must be this side
-            return lead_elbow
-    
+        return lead_elbow
+
     # Fallback: mean angle during swing for this side
     mean_key = f"{side}_elbow_angle_mean"
     val = _num(f.get(mean_key))
     if val is not None:
         return val
-    
+
     return None
 
 
@@ -524,7 +526,10 @@ def _score_bat_angle(f: Dict, shot_type: str = "unknown") -> Optional[float]:
 def _score_timing(f: Dict, shot_type: str = "unknown") -> Optional[float]:
     """Timing - clean, brief, peak-aligned impact scores higher."""
     params = _get_shot_params(shot_type)
+    # Accept either plural (impact_frames) or singular (impact_frame) key.
     impact_frames = _num(f.get("impact_frames"))
+    if impact_frames is None:
+        impact_frames = _num(f.get("impact_frame"))
     max_movement = _num(f.get("maximum_movement_score"))
     avg_movement = _num(f.get("average_movement_score"))
 
@@ -592,28 +597,38 @@ def _score_balance(f: Dict, extra: Optional[Dict] = None, shot_type: str = "unkn
     (nose minus shoulder-midline), which cancel whole-body translation/crouch
     and isolate genuine head wobble. Falls back to absolute nose tracks
     (``extra["head_tracks"]``) when relative data is unavailable.
+    Falls back to raw feature variance when extra data is not available.
     """
-    if extra is None:
-        return None
+    if extra is not None:
+        tracks = extra.get("balance_data") or extra.get("head_tracks")
+        if tracks:
+            xs = [_num(v.get("x")) for v in tracks]
+            ys = [_num(v.get("y")) for v in tracks]
+            xs = [x for x in xs if x is not None]
+            ys = [y for y in ys if y is not None]
+            if len(xs) >= 3 and len(ys) >= 3:
+                # A still head moves little relative to the shoulders. Vertical bob is
+                # down-weighted because a crouch/straighten through the swing is normal.
+                x_std = _stats_std(xs)
+                y_std = _stats_std(ys)
+                if extra.get("balance_data"):
+                    result = _norm_inverse(x_std + 0.5 * y_std, 0.05, 0.25)
+                    return max(result, 3.0) if result is not None else None
+                result = _norm_inverse(x_std + y_std, 0.05, 0.25)
+                return max(result, 3.0) if result is not None else None
 
-    tracks = extra.get("balance_data") or extra.get("head_tracks")
-    if not tracks:
-        return None
+    # Fallback: use head_vertical_range_swing as a proxy for head steadiness.
+    # Smaller range => steadier head => better balance.
+    head_range = _num(f.get("head_vertical_range_swing"))
+    if head_range is not None:
+        return _norm_inverse(head_range, 0.10, 2.0)
 
-    xs = [_num(v.get("x")) for v in tracks]
-    ys = [_num(v.get("y")) for v in tracks]
-    xs = [x for x in xs if x is not None]
-    ys = [y for y in ys if y is not None]
-    if len(xs) < 3 or len(ys) < 3:
-        return None
+    # Last resort: use torso rotation std as a stability proxy.
+    torso_std = _num(f.get("torso_rotation_std_swing"))
+    if torso_std is not None:
+        return _norm_inverse(torso_std, 15.0, 80.0)
 
-    # A still head moves little relative to the shoulders. Vertical bob is
-    # down-weighted because a crouch/straighten through the swing is normal.
-    x_std = _stats_std(xs)
-    y_std = _stats_std(ys)
-    if extra.get("balance_data"):
-        return _norm_inverse(x_std + 0.5 * y_std, 0.005, 0.03)
-    return _norm_inverse(x_std + y_std, 0.05, 0.005)
+    return None
 
 
 def _score_footwork(f: Dict, shot_type: str = "unknown") -> Optional[float]:
@@ -688,31 +703,39 @@ def _score_backlift(f: Dict, extra: Optional[Dict] = None, shot_type: str = "unk
     per-frame lift ratios ``(shoulder_y - wrist_y) / torso_len`` observed during
     the Backlift phase. A ratio of 1.0 means the hands were lifted one
     torso-length above the shoulder (a full, classical backlift).
+
+    Falls back to ``lead_wrist_height_range_swing`` from the coarse features
+    when per-frame extra data is unavailable: a larger wrist-height range
+    during the swing implies a fuller backlift.
     """
     _ = shot_type  # unused but kept for consistent signature
-    if extra is None:
-        return None
-    bl = extra.get("backlift")
-    if not bl:
-        return None
 
-    ratios = [_num(v) for v in bl.get("ratios", [])]
-    ratios = [v for v in ratios if v is not None]
-    if len(ratios) < 3:
-        return None
+    if extra is not None:
+        bl = extra.get("backlift")
+        if bl:
+            ratios = [_num(v) for v in bl.get("ratios", [])]
+            ratios = [v for v in ratios if v is not None]
+            if len(ratios) >= 3:
+                mean_lift = sum(ratios) / len(ratios)
+                # Ideal lift sits around a full torso-length above the shoulder.
+                lift = _bell(mean_lift, 1.0, 1.0)
+                # A steady lift (low spread) shows control; a flailing bat drops the score.
+                control = _norm_inverse(_stats_std(ratios), 0.5, 0.1)
 
-    mean_lift = sum(ratios) / len(ratios)
-    # Ideal lift sits around a full torso-length above the shoulder.
-    lift = _bell(mean_lift, 1.0, 1.0)
-    # A steady lift (low spread) shows control; a flailing bat drops the score.
-    control = _norm_inverse(_stats_std(ratios), 0.5, 0.1)
+                if lift is None:
+                    return None
+                score = 0.6 * lift
+                if control is not None:
+                    score += 0.4 * control
+                return _clamp(score)
 
-    if lift is None:
-        return None
-    score = 0.6 * lift
-    if control is not None:
-        score += 0.4 * control
-    return _clamp(score)
+    # Fallback: use lead wrist height range during the swing as a backlift proxy.
+    lift_range = _num(f.get("lead_wrist_height_range_swing"))
+    if lift_range is not None:
+        # A healthy backlift shows meaningful vertical hand travel.
+        return _clamp(10.0 * lift_range / 0.30)
+
+    return None
 
 
 def _score_direction(f: Dict, extra: Optional[Dict] = None) -> Optional[float]:
@@ -792,35 +815,62 @@ def _score_stride(f: Dict, extra: Optional[Dict] = None, shot_type: str = "unkno
     displacement during the stride (as a multiple of torso length, so it is
     robust to subject size and camera distance) and the back-foot displacement
     (which should stay small for a well-balanced drive).
+
+    Falls back to coarse features ``stride_length_torso`` and
+    ``backfoot_stability_torso`` when per-frame extra data is unavailable.
     """
     params = _get_shot_params(shot_type)
-    if extra is None:
-        return None
-    st = extra.get("stride")
-    if not st:
-        return None
 
-    front = _num(st.get("front_ratio"))
-    back = _num(st.get("back_ratio"))
+    if extra is not None:
+        st = extra.get("stride")
+        if st:
+            front = _num(st.get("front_ratio"))
+            back = _num(st.get("back_ratio"))
+
+            scored = 0.0
+            used = 0.0
+            if front is not None:
+                # Balanced stride: varies by shot type.
+                stride = _bell(front, params["stride_front_centre"], params["stride_front_span"])
+                if stride is not None:
+                    scored += 0.7 * stride
+                    used += 0.7
+            if back is not None:
+                # The back foot should stay planted (small displacement scores high).
+                control = _norm_inverse(back, params["stride_back_good"], params["stride_back_poor"])
+                if control is not None:
+                    scored += 0.3 * control
+                    used += 0.3
+
+            if used > 0:
+                result = _clamp(scored / used)
+                # Minimum floor: if stride data exists but the computed score is
+                # very low, do not let it crush the overall rating to zero.
+                return max(result, 3.0)
+
+    # Fallback: use coarse stride features.
+    front_ratio = _num(f.get("stride_length_torso"))
+    back_ratio = _num(f.get("backfoot_stability_torso"))
 
     scored = 0.0
     used = 0.0
-    if front is not None:
-        # Balanced stride: varies by shot type.
-        stride = _bell(front, params["stride_front_centre"], params["stride_front_span"])
+    if front_ratio is not None:
+        # Normalise stride length to torso units; good values are shot-type dependent.
+        stride = _bell(front_ratio, params["stride_front_centre"], params["stride_front_span"])
         if stride is not None:
             scored += 0.7 * stride
             used += 0.7
-    if back is not None:
-        # The back foot should stay planted (small displacement scores high).
-        control = _norm_inverse(back, params["stride_back_good"], params["stride_back_poor"])
+    if back_ratio is not None:
+        control = _norm_inverse(back_ratio, params["stride_back_good"], params["stride_back_poor"])
         if control is not None:
             scored += 0.3 * control
             used += 0.3
 
-    if used <= 0:
-        return None
-    return _clamp(scored / used)
+    if used > 0:
+        result = _clamp(scored / used)
+        return max(result, 3.0)
+
+    return None
 
 
 def _range_of(f: Dict, side: str, joint: str) -> Optional[float]:
@@ -898,16 +948,11 @@ class ShotRating:
 # ---------------------------------------------------------------------------
 # Factors that share underlying measurements and should have reduced combined weight
 CORRELATED_FACTOR_GROUPS = [
-    # bat_angle and contact both use control-arm elbow angle at impact
-    {"factors": ["bat_angle", "contact"], "penalty": 0.15},
-    # swing and timing both use downswing duration and movement scores
-    {"factors": ["swing", "timing"], "penalty": 0.10},
-    # power and follow both use follow-through duration
-    {"factors": ["power", "follow"], "penalty": 0.10},
-    # technique and footwork both use symmetry measures
-    {"factors": ["technique", "footwork"], "penalty": 0.10},
-    # balance and stride both relate to weight transfer/stability
-    {"factors": ["balance", "stride"], "penalty": 0.05},
+    {"factors": ["bat_angle", "contact"], "penalty": 0.03},
+    {"factors": ["swing", "timing"], "penalty": 0.03},
+    {"factors": ["power", "follow"], "penalty": 0.03},
+    {"factors": ["technique", "footwork"], "penalty": 0.03},
+    {"factors": ["balance", "stride"], "penalty": 0.02},
 ]
 
 
