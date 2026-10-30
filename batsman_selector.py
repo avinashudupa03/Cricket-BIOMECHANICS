@@ -15,6 +15,8 @@ from config_yolo import (
     MIN_LOCK_FRAMES_BEFORE_SWITCH,
     POSITION_WEIGHT, SIZE_WEIGHT, POSE_WEIGHT, TEMPORAL_WEIGHT, MOVEMENT_WEIGHT,
     CONTINUITY_WEIGHT,
+    ROI_OVERLAP_WEIGHT, ROI_CENTER_PROXIMITY_WEIGHT, YOLO_CONFIDENCE_WEIGHT,
+    SIZE_POSITION_WEIGHT,
     BATTING_REGION_CENTER, BATTING_REGION_SIGMA,
     MIN_BATSMAN_BBOX_HEIGHT, IDEAL_BATSMAN_BBOX_HEIGHT,
     WICKETKEEPER_Y_MIN, NON_STRIKER_X_MAX, NON_STRIKER_Y_MIN,
@@ -24,7 +26,7 @@ from config_yolo import (
     CONTINUITY_SPATIAL_WEIGHT, CONTINUITY_IOU_WEIGHT, CONTINUITY_SIZE_WEIGHT,
     CONTINUITY_ROI_POSITION_WEIGHT, CONTINUITY_MOVEMENT_WEIGHT,
     MAX_CONTINUITY_DISPLACEMENT, MIN_CONTINUITY_IOU, MAX_SIZE_RATIO_DIFF,
-    BATSMAN_ROI, BATSMAN_ROI_MIN_OVERLAP, ROI_OVERLAP_WEIGHT,
+    BATSMAN_ROI, BATSMAN_ROI_MIN_OVERLAP,
 )
 
 import math
@@ -157,6 +159,7 @@ class PersonTrack:
 
     # ROI evidence (normalized 0-1)
     roi_overlap: float = 0.0      # fraction of bbox inside the batsman ROI
+    roi_center_proximity: float = 0.0  # inverse distance from bbox center to ROI center
     inside_roi: bool = False      # bbox center inside batsman ROI
 
     # Scores
@@ -325,6 +328,11 @@ class BatsmanSelector:
         self.batsman_lost_frames: int = 0
         self.batsman_recovery_active: bool = False
         
+        # Temporary-loss recovery state (separate from physical identity lock)
+        self.recovery_mode: bool = False
+        self.recovery_search_multiplier: float = 2.0  # Wider search radius during recovery only
+        self.recovery_start_frame: Optional[int] = None
+        
         # Track history
         self.track_history: Dict[int, PersonTrack] = {}
         self.selection_history: List[BatsmanSelection] = []
@@ -474,21 +482,36 @@ class BatsmanSelector:
                 track.temporal_score = track.temporal_score if track.temporal_score > 0 else 0.0
                 track.movement_score = track.movement_score if track.movement_score > 0 else 0.0
 
+            # --- ROI center proximity (inverse distance from bbox center to ROI center) ---
+            roi_center_proximity = 0.0
+            if is_currently_detected and track.center is not None:
+                roi = roi_bbox()
+                roi_cx = (roi[0] + roi[2]) / 2.0
+                roi_cy = (roi[1] + roi[3]) / 2.0
+                dist = math.hypot(track.center[0] - roi_cx, track.center[1] - roi_cy)
+                roi_radius = math.hypot(roi[2] - roi[0], roi[3] - roi[1]) / 2.0
+                roi_center_proximity = max(0.0, 1.0 - dist / max(roi_radius, 1e-6))
+                track.roi_center_proximity = roi_center_proximity
+
             # Continuity score: physical-person tracking (track-ID independent)
             # This works for both detected and recently lost tracks
             track.continuity_score = compute_continuity_score(track, self.prev_batsman_state)
 
-            # Weighted total (evidence + continuity). ROI overlap has the
-            # strongest influence so the batsman ROI location always dominates.
-            track.total_score = (
-                ROI_OVERLAP_WEIGHT * track.roi_overlap +
-                POSITION_WEIGHT * track.position_score +
-                SIZE_WEIGHT * track.size_score +
-                POSE_WEIGHT * track.pose_score +
-                TEMPORAL_WEIGHT * track.temporal_score +
-                MOVEMENT_WEIGHT * track.movement_score +
-                CONTINUITY_WEIGHT * track.continuity_score
-            )
+            # Weighted total. ROI POSITION (overlap + center proximity = 0.70)
+            # DOMINATES YOLO confidence (0.15). A high-confidence detection
+            # outside the batsman ROI MUST NOT beat a valid batsman inside the ROI.
+            if is_currently_detected:
+                # Size + position prior combined
+                size_pos_prior = 0.5 * track.size_score + 0.5 * track.position_score
+                track.total_score = (
+                    ROI_OVERLAP_WEIGHT * track.roi_overlap +
+                    ROI_CENTER_PROXIMITY_WEIGHT * roi_center_proximity +
+                    YOLO_CONFIDENCE_WEIGHT * track.confidence +
+                    SIZE_POSITION_WEIGHT * size_pos_prior
+                )
+            else:
+                # Temporarily lost track: rely on continuity only (no fresh ROI/confidence evidence)
+                track.total_score = CONTINUITY_WEIGHT * track.continuity_score
 
             scores[track_id] = track.total_score
             continuity_scores[track_id] = track.continuity_score
@@ -776,47 +799,200 @@ class BatsmanSelector:
         # Check if current batsman is still viable
         track_id_changed = False
         if self.current_batsman_id is not None:
-            current_score = scores.get(self.current_batsman_id, 0.0)
-            current_continuity = continuity_scores.get(self.current_batsman_id, 0.0)
-            score_ratio = best_score / max(current_score, 1e-6)
+            current_track = self.track_history.get(self.current_batsman_id)
+            current_is_detected = (current_track is not None and current_track.frames_lost == 0)
             
-            # Also consider continuity of current batsman
-            current_is_viable = (score_ratio < BATSMAN_SWITCH_THRESHOLD or 
-                                current_continuity > 0.6)  # High continuity overrides score ratio
-            
-            if current_is_viable:
-                self.lock_frames = min(self.lock_frames + 1, BATSMAN_LOCK_FRAMES)
-                return BatsmanSelection(
-                    selected_track_id=self.current_batsman_id,
-                    confidence=current_score,
-                    all_scores=scores,
-                    all_continuity_scores=continuity_scores,
-                    reason="maintaining_lock_hysteresis",
-                    frame=frame_num,
-                    physical_batsman_id=self.physical_batsman_id,
-                    track_id_changed=False,
-                    batsman_lost=False,
-                    recovery_active=False
-                )
-            else:
-                # Significant difference - allow switch ONLY if minimum lock duration met
-                if self.lock_frames >= MIN_LOCK_FRAMES_BEFORE_SWITCH:
-                    self.lock_frames = 0
-                    track_id_changed = (best_id != self.current_batsman_id)
-                else:
+            if current_is_detected:
+                # Current track is detected - maintain lock via hysteresis
+                current_score = scores.get(self.current_batsman_id, 0.0)
+                current_continuity = continuity_scores.get(self.current_batsman_id, 0.0)
+                score_ratio = best_score / max(current_score, 1e-6)
+                
+                # Also consider continuity of current batsman
+                current_is_viable = (score_ratio < BATSMAN_SWITCH_THRESHOLD or 
+                                    current_continuity > 0.6)
+                
+                if current_is_viable:
                     self.lock_frames = min(self.lock_frames + 1, BATSMAN_LOCK_FRAMES)
                     return BatsmanSelection(
                         selected_track_id=self.current_batsman_id,
                         confidence=current_score,
                         all_scores=scores,
                         all_continuity_scores=continuity_scores,
-                        reason="maintaining_lock_min_duration",
+                        reason="maintaining_lock_hysteresis",
                         frame=frame_num,
                         physical_batsman_id=self.physical_batsman_id,
                         track_id_changed=False,
                         batsman_lost=False,
                         recovery_active=False
                     )
+                else:
+                    # Significant difference - allow switch ONLY if minimum lock duration met
+                    if self.lock_frames >= MIN_LOCK_FRAMES_BEFORE_SWITCH:
+                        self.lock_frames = 0
+                        track_id_changed = (best_id != self.current_batsman_id)
+                    else:
+                        self.lock_frames = min(self.lock_frames + 1, BATSMAN_LOCK_FRAMES)
+                        return BatsmanSelection(
+                            selected_track_id=self.current_batsman_id,
+                            confidence=current_score,
+                            all_scores=scores,
+                            all_continuity_scores=continuity_scores,
+                            reason="maintaining_lock_min_duration",
+                            frame=frame_num,
+                            physical_batsman_id=self.physical_batsman_id,
+                            track_id_changed=False,
+                            batsman_lost=False,
+                            recovery_active=False
+                        )
+            else:
+                # Current track ID is LOST (not detected this frame).
+                # Enter temporary-loss recovery mode to reacquire the same
+                # physical batsman under a possibly new ByteTrack ID.
+                # Do NOT maintain lock via continuity override - that would keep
+                # a stale/lost track selected forever.
+                # Do NOT weaken MAX_CONTINUITY_DISPLACEMENT globally - the wider
+                # search radius applies ONLY during this recovery branch.
+                self.batsman_lost_frames += 1
+                self.recovery_mode = True
+                if self.recovery_start_frame is None:
+                    self.recovery_start_frame = frame_num
+                
+                # Get the last known position of the locked batsman from track history
+                last_known_center = None
+                last_known_bbox = None
+                if current_track is not None:
+                    last_known_center = current_track.center
+                    last_known_bbox = current_track.bbox
+                
+                # Wider search radius during recovery only (not global)
+                recovery_search_radius = MAX_CONTINUITY_DISPLACEMENT * self.recovery_search_multiplier
+                
+                best_continuity_match = None
+                best_continuity_score = 0.0
+                
+                for track_id, cont_score in continuity_scores.items():
+                    track = self.track_history.get(track_id)
+                    if track is None or track.center is None:
+                        continue
+                    
+                    # ONLY consider currently detected tracks (frames_lost == 0)
+                    if track.frames_lost > 0:
+                        continue
+                    
+                    # Spatial proximity check against last known position
+                    # Uses wider search radius during recovery only
+                    spatial_match = False
+                    if last_known_center is not None:
+                        dist = math.hypot(
+                            track.center[0] - last_known_center[0],
+                            track.center[1] - last_known_center[1],
+                        )
+                        if dist <= recovery_search_radius:
+                            spatial_match = True
+                    
+                    # IoU match against last known bbox
+                    iou_match = False
+                    if last_known_bbox is not None and track.bbox is not None:
+                        iou = bbox_iou(track.bbox, last_known_bbox)
+                        if iou >= MIN_CONTINUITY_IOU:
+                            iou_match = True
+                    
+                    # Strict size check: bbox height must be similar to last known
+                    size_match = False
+                    if last_known_bbox is not None and track.bbox is not None:
+                        last_bh = last_known_bbox[3] - last_known_bbox[1]
+                        cur_bh = track.bbox[3] - track.bbox[1]
+                        if last_bh > 0 and cur_bh > 0:
+                            size_ratio = cur_bh / last_bh
+                            if 0.5 <= size_ratio <= 2.0:
+                                size_match = True
+                    
+                    # Movement direction consistency: reject candidates moving
+                    # sharply toward frame edges (likely a different player
+                    # entering/leaving, not the batsman shifting position)
+                    direction_ok = True
+                    if last_known_center is not None and track.center is not None:
+                        dx = track.center[0] - last_known_center[0]
+                        dy = track.center[1] - last_known_center[1]
+                        dist = math.hypot(dx, dy)
+                        if dist > 0:
+                            # Moving sharply right with little vertical change
+                            # could be a fielder/non-striker entering from right
+                            if dx > 0.25 and abs(dy) < 0.1:
+                                direction_ok = False
+                    
+                    # Accept if spatial proximity OR IoU match, plus size.
+                    # Aspect ratio is intentionally NOT checked during recovery
+                    # because the batsman's bbox shape changes dramatically
+                    # during backlift/downswing/follow-through.
+                    accept = (spatial_match or iou_match) and size_match and direction_ok
+                    
+                    if accept and cont_score > best_continuity_score:
+                        best_continuity_match = track_id
+                        best_continuity_score = cont_score
+                
+                if best_continuity_match is not None:
+                    # Same physical person, new ByteTrack ID - reassign, not a physical switch
+                    match_score = scores.get(best_continuity_match, 0.0)
+                    track_id_changed = True
+                    # Exit recovery mode - batsman reacquired
+                    self.recovery_mode = False
+                    self.recovery_start_frame = None
+                    # Update current batsman ID and state so subsequent frames
+                    # track from the reacquired position
+                    self.current_batsman_id = best_continuity_match
+                    self.lock_frames = 0
+                    reacquired_track = self.track_history.get(best_continuity_match)
+                    if reacquired_track:
+                        self.prev_batsman_state = {
+                            'center': reacquired_track.center,
+                            'bbox': reacquired_track.bbox,
+                            'bbox_height': reacquired_track.bbox_height,
+                            'bbox_width': reacquired_track.bbox_width,
+                            'frame': frame_num,
+                        }
+                    return BatsmanSelection(
+                        selected_track_id=best_continuity_match,
+                        confidence=match_score,
+                        all_scores=scores,
+                        all_continuity_scores=continuity_scores,
+                        reason="track_id_reacquired_after_loss",
+                        frame=frame_num,
+                        physical_batsman_id=self.physical_batsman_id,
+                        track_id_changed=True,
+                        batsman_lost=False,
+                        recovery_active=True
+                    )
+                
+                # No good continuity match - mark as lost, keep identity lock
+                if self.batsman_lost_frames <= BATSMAN_MAX_LOST_FRAMES:
+                    return BatsmanSelection(
+                        selected_track_id=None,
+                        confidence=0.0,
+                        all_scores=scores,
+                        all_continuity_scores=continuity_scores,
+                        reason="locked_batsman_temporarily_lost",
+                        frame=frame_num,
+                        physical_batsman_id=self.physical_batsman_id,
+                        track_id_changed=False,
+                        batsman_lost=False,
+                        recovery_active=True
+                    )
+                
+                # Recovery window exceeded - lost for good
+                return BatsmanSelection(
+                    selected_track_id=None,
+                    confidence=0.0,
+                    all_scores=scores,
+                    all_continuity_scores=continuity_scores,
+                    reason="locked_batsman_recovery_exceeded",
+                    frame=frame_num,
+                    physical_batsman_id=self.physical_batsman_id,
+                    track_id_changed=False,
+                    batsman_lost=True,
+                    recovery_active=False
+                )
         
         # New selection or forced switch
         if best_id != self.current_batsman_id:

@@ -86,7 +86,7 @@ YOLO_VERBOSE = False
 BATSMAN_ROI = {
     "x1": 0.25,   # Left boundary - covers off-side to leg-side at batting crease
     "y1": 0.05,   # Top boundary - captures full backlift height
-    "x2": 0.70,   # Right boundary - excludes deep fielders/background
+    "x2": 0.85,   # Right boundary - captures rightward movement during impact/follow-through
     "y2": 0.65,   # Bottom boundary - stops before non-striker/foreground zone
 }
 
@@ -140,15 +140,21 @@ MIN_CONTINUITY_IOU = 0.05             # Lowered to allow more continuity
 MAX_SIZE_RATIO_DIFF = 0.60            # Max allowed size ratio difference (increased)
 
 # Evidence weights (must sum to ~1.0 for normalized scoring)
-# ROI overlap is the DOMINANT factor: a detection inside the batsman ROI must
-# always outrank a high-confidence detection outside the ROI (non-striker).
+# ROI POSITION (overlap + center proximity) = 0.70 DOMINATES YOLO confidence (0.15).
+# A high-confidence detection outside the batsman ROI MUST NOT beat a valid
+# batsman candidate inside the ROI.
 ROI_OVERLAP_WEIGHT = 0.50         # Strongest factor - batsman ROI location prior
-POSITION_WEIGHT = 0.10            # Batting crease position (gaussian prior)
-SIZE_WEIGHT = 0.10                # Bounding box size
-POSE_WEIGHT = 0.10                # Pose proxy from bbox geometry
-TEMPORAL_WEIGHT = 0.05            # Temporal consistency
-MOVEMENT_WEIGHT = 0.05            # Movement pattern consistency
-CONTINUITY_WEIGHT = 0.20          # Physical-person continuity (track-ID independent)
+ROI_CENTER_PROXIMITY_WEIGHT = 0.20 # Closer to ROI center = higher score
+YOLO_CONFIDENCE_WEIGHT = 0.15     # YOLO detection confidence (secondary to ROI)
+SIZE_POSITION_WEIGHT = 0.15       # Combined size + position prior
+
+# Legacy individual weights (kept for backwards compatibility, not used in new formula)
+POSITION_WEIGHT = 0.10
+SIZE_WEIGHT = 0.10
+POSE_WEIGHT = 0.10
+TEMPORAL_WEIGHT = 0.05
+MOVEMENT_WEIGHT = 0.05
+CONTINUITY_WEIGHT = 0.20
 
 # Position priors - focused on batting crease at far end of pitch
 # The batsman at the far end appears in the upper-middle portion of the frame

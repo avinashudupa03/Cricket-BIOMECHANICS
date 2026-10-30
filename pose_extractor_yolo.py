@@ -635,6 +635,48 @@ class YOLOGuidedPoseExtractor:
 
         return full_lms
 
+    def _validate_pose_landmarks(self, landmarks: List) -> bool:
+        """Validate MediaPipe pose landmarks before accepting.
+
+        Rejects poses with:
+        - Missing key landmarks (nose, shoulders)
+        - Coordinates outside [0, 1] range (invalid crop mapping)
+        - Very low visibility on key landmarks
+        """
+        if landmarks is None or len(landmarks) == 0:
+            return False
+
+        # Key landmark indices (MediaPipe Pose)
+        NOSE = 0
+        LEFT_SHOULDER = 11
+        RIGHT_SHOULDER = 12
+
+        def _lm(idx):
+            if idx >= len(landmarks):
+                return None
+            return landmarks[idx]
+
+        nose = _lm(NOSE)
+        l_shoulder = _lm(LEFT_SHOULDER)
+        r_shoulder = _lm(RIGHT_SHOULDER)
+
+        # Must have nose and at least one shoulder
+        if nose is None:
+            return False
+        if l_shoulder is None and r_shoulder is None:
+            return False
+
+        # Check coordinates are within [0, 1] range
+        for lm in [nose, l_shoulder, r_shoulder]:
+            if lm is None:
+                continue
+            if not (0.0 <= lm.x <= 1.0 and 0.0 <= lm.y <= 1.0):
+                return False
+            if lm.visibility is not None and lm.visibility < 0.1:
+                return False
+
+        return True
+
     def analyze(self, video_path, fps=25.0, debug_video=False):
         """
         Main analysis entry point - compatible with original PoseExtractor.analyze()
@@ -707,7 +749,7 @@ class YOLOGuidedPoseExtractor:
             # 3. Run batsman selector
             selection = self.batsman_selector.update(yolo_tracks_dict, frame_index)
 
-            # 4. Get selected batsman bbox (with recovery logic)
+            # 4. Get selected batsman bbox - ONLY use current detection, never stale
             batsman_bbox = None
             batsman_track = None
 
@@ -719,21 +761,8 @@ class YOLOGuidedPoseExtractor:
                         self.last_known_batsman_bbox = track.bbox
                         self.batsman_recovery_frames = 0
                         break
-
-                if batsman_bbox is None and self.current_batsman_id == selection.selected_track_id \
-                        and self.last_known_batsman_bbox is not None:
-                    self.batsman_recovery_frames += 1
-                    if self.batsman_recovery_frames <= self.MAX_RECOVERY_FRAMES:
-                        batsman_bbox = self.last_known_batsman_bbox
-                        class DummyTrack:
-                            def __init__(self, bbox):
-                                self.bbox = bbox
-                                self.center = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
-                                self.track_id = selection.selected_track_id
-                        batsman_track = DummyTrack(batsman_bbox)
-                else:
-                    self.last_known_batsman_bbox = None
-                    self.batsman_recovery_frames = 0
+                # If selected_track_id is not None but track not in current detections,
+                # batsman_bbox stays None - no MediaPipe on stale bbox during recovery.
 
             # Identity switch detection (BEFORE updating current_batsman_id)
             identity_switch_detected = False
@@ -749,7 +778,6 @@ class YOLOGuidedPoseExtractor:
             n_detected = len(yolo_tracks)
             selected_person_index = None
             batsman_center = None
-            identity_switch_detected = False
             batsman_detected = False
             
             # New: physical-person tracking info
@@ -762,20 +790,27 @@ class YOLOGuidedPoseExtractor:
                 pose_landmarks = self._detect_batsman_roi(frame, timestamp_ms, batsman_bbox)
 
                 if pose_landmarks is not None:
-                    tracking_ok = True
-                    confidence = selection.confidence
-                    batsman_detected = True
-                    self.stats["frames_roi_mediapipe"] += 1
-                    self.stats["frames_with_batsman"] += 1
+                    # Validate pose landmarks before accepting
+                    if not self._validate_pose_landmarks(pose_landmarks):
+                        if DEBUG_MODE:
+                            print(f"[POSE VALIDATION] Rejected invalid pose at frame {frame_index}")
+                        pose_landmarks = None
+                        self.stats["frames_mediapipe_failed"] += 1
+                    else:
+                        tracking_ok = True
+                        confidence = selection.confidence
+                        batsman_detected = True
+                        self.stats["frames_roi_mediapipe"] += 1
+                        self.stats["frames_with_batsman"] += 1
 
-                    for i, track in enumerate(yolo_tracks):
-                        if track.track_id == selection.selected_track_id:
-                            selected_person_index = i
-                            break
+                        for i, track in enumerate(yolo_tracks):
+                            if track.track_id == selection.selected_track_id:
+                                selected_person_index = i
+                                break
 
-                    h, w = frame.shape[:2]
-                    if batsman_track:
-                        batsman_center = (batsman_track.center[0] / w, batsman_track.center[1] / h)
+                        h, w = frame.shape[:2]
+                        if batsman_track:
+                            batsman_center = (batsman_track.center[0] / w, batsman_track.center[1] / h)
                 else:
                     self.stats["frames_mediapipe_failed"] += 1
 
